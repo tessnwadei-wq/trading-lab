@@ -36,7 +36,9 @@ def test_invested_days_earn_the_asset_not_the_cash_rate():
     rate = daily_cash_returns(irx([25.2] * 4))  # 0.1% a day, exaggerated so it's visible
     signal = pd.Series([1, 1, 1, 1], index=prices.index, dtype=float)
     res = run_backtest(prices, signal, cost_multiplier=0, cash_rate=rate)
-    assert res.equity.iloc[-1] == pytest.approx(1.10)  # all asset, no interest
+    # Day 1: still in cash (the buy fills at day 1's close), earns 0.1% interest.
+    # Days 2-3: invested, earn the asset's +10% and no interest.
+    assert res.equity.iloc[-1] == pytest.approx(1.001 * 1.10)
 
 
 def test_missing_irx_warns_and_cash_earns_zero():

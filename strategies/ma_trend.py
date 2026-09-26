@@ -4,7 +4,8 @@ Moving-average trend filter (a classic, very simple rule).
 Rule:  At each day's close, compare the price with its average over the last 200 days.
        * price above the average  -> be invested (1)
        * price at/below average   -> hold cash (0)
-       The backtester acts on the NEXT trading day.
+       The backtester trades at the NEXT day's close (you can't trade at a close you've
+       only just seen).
 
 Source: popularised by, among others, Meb Faber, "A Quantitative Approach to Tactical
 Asset Allocation" (2007), which used a 10-month (~200-day) average. Traders have used the

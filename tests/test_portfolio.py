@@ -58,27 +58,37 @@ def test_twenty_percent_cap_limits_calm_assets():
     # A calm asset: 0.2% daily move -> 1% rule would allow 1% / 0.6% = 167%. The cap wins: 20%.
     res = run(book(CALM=wiggle(60, 0.002)))
     assert res.risk.sized_by_cap == 1
+    # The buy fills at exactly 20% of the account.
     assert res.weights.loc[res.trades.entry.iloc[0]].iloc[0] == pytest.approx(0.20, abs=1e-6)
-    assert res.risk.max_position_weight <= 0.20 + 1e-9
+    assert_over_cap_is_trimmed_next_close(res)
 
 
 def test_position_that_grows_past_twenty_percent_is_trimmed():
     rising = np.concatenate([wiggle(30, 0.002), wiggle(30, 0.002)[-1] * np.cumprod(np.full(30, 1.02))])
     res = run(book(UP=rising))
     assert res.risk.trims >= 1
-    assert res.weights.max().iloc[0] <= 0.20 + 1e-9
+    assert res.risk.days_over_cap >= 1
+    # Found above 20% at a close -> trimmed at the next close. In between it can only drift by one
+    # day's move (2% here), never more.
+    assert_over_cap_is_trimmed_next_close(res)
+    assert res.weights.max().iloc[0] <= 0.20 * 1.02 + 1e-9
 
 
 def test_several_positions_trimmed_on_the_same_day_all_end_at_or_below_twenty_percent():
     # Found by the risk-manager review: trimming one position pays costs, which shrinks the account and
-    # could push an already-checked position a hair over 20%. Every close must end at or below 20%.
+    # could push an already-checked position a hair over 20%. With same-close timing every close ends at or
+    # below 20%; with next-close timing every over-20% position is back near 18% after the next close.
     base = wiggle(30, 0.002)
     jump = np.concatenate([base, base[-1] * np.cumprod(np.full(30, 1.03))])
     other = np.concatenate([base, base[-1] * np.cumprod(np.full(30, 1.025))])
-    res = run(book(A=jump, B=other, C=wiggle(60, 0.002)), cost_multiplier=5)
+    prices = book(A=jump, B=other, C=wiggle(60, 0.002))
+    old = run(prices, cost_multiplier=5, execution="same_close")
+    assert old.risk.trims >= 2
+    assert old.risk.max_position_weight <= 0.20 * (1 + 1e-9)
+    assert old.weights.max().max() <= 0.20 * (1 + 1e-9)
+    res = run(prices, cost_multiplier=5)
     assert res.risk.trims >= 2
-    assert res.risk.max_position_weight <= 0.20 * (1 + 1e-9)
-    assert res.weights.max().max() <= 0.20 * (1 + 1e-9)
+    assert_over_cap_is_trimmed_next_close(res)
 
 
 def test_no_more_than_five_open_positions():
@@ -95,8 +105,13 @@ def test_stop_exit_limits_the_loss_to_about_one_percent():
     res = run(book(A=np.concatenate([calm, drop])))
     stops = res.trades[res.trades.reason == "stop"]
     assert len(stops) >= 1
-    # A slide of 3% a day can overshoot the stop a little, but not by much.
-    assert -0.015 < stops.loss_of_account.min() < -0.005
+    # A slide of 3% a day overshoots the stop a little, and the sale fills one close after the stop is
+    # seen, so it slides one more day: a bit more than 1%, but not much.
+    assert -0.02 < stops.loss_of_account.min() < -0.005
+    stop_seen = res.equity.index.get_loc(stops.exit.iloc[0]) - 1   # the close the stop was hit at
+    same = run(book(A=np.concatenate([calm, drop])), execution="same_close")
+    assert same.trades[same.trades.reason == "stop"].exit.iloc[0] < stops.exit.iloc[0]
+    assert stop_seen >= 0
 
 
 def test_after_a_stop_we_wait_for_a_fresh_signal():
@@ -124,8 +139,10 @@ def test_circuit_breaker_stops_new_trades_after_ten_percent_fall():
     tripped = res.equity.index.get_loc(event["tripped"])
     resumed = res.equity.index.get_loc(event["resumed"])
     assert resumed - tripped == config.CIRCUIT_BREAKER_REVIEW_DAYS
-    # Everything was stopped out in the fall, so nothing is held while the breaker is on.
-    assert (res.weights.iloc[tripped:resumed].sum(axis=1) == 0).all()
+    # Everything was stopped out in the fall (the sales fill at the close after the trip), so nothing is
+    # held from then until the breaker resumes.
+    assert (res.weights.iloc[tripped + 1:resumed].sum(axis=1) == 0).all()
+    assert event["resumed_by"].startswith("simulated")
 
 
 def test_circuit_breaker_blocks_entries_then_resumes():
@@ -154,15 +171,30 @@ def test_circuit_breaker_blocks_entries_then_resumes():
 
 
 def test_costs_and_cash_interest_apply_to_the_portfolio():
-    prices = book(A=wiggle(41, 0.002))  # 41 days: ends exactly where it started
+    prices = book(A=wiggle(42, 0.002))  # bought at day 21's close, and day 41 ends at that same price
     cash = pd.Series(0.0001, index=prices["A"].index)
     res = run(prices, cash_rate=cash)
+    assert prices["A"]["Close"].iloc[21] == pytest.approx(prices["A"]["Close"].iloc[-1])
     # Buying 20% costs 0.15% of 20%; the cash part earns 0.01% a day; the asset ends flat.
     assert res.risk.entries == 1
     with_interest = res.equity.iloc[-1]
     without = run(prices).equity.iloc[-1]
     assert without == pytest.approx(1 - 0.20 * config.COST_PER_TRADE, rel=1e-4)
     assert with_interest > without
+
+
+def assert_over_cap_is_trimmed_next_close(res):
+    """The next-close version of the 20% rule: buys never fill above 20%, and any position that closes
+    above 20% is cut back to 18% at the very next close."""
+    w = res.weights
+    for a in w.columns:
+        over = w.index[w[a] > config.MAX_POSITION_WEIGHT * (1 + 1e-9)]
+        for day in over:
+            nxt = w.index.get_loc(day) + 1
+            if nxt < len(w):
+                assert w[a].iloc[nxt] <= config.TRIM_BACK_TO + 1e-3, (a, day)
+    for t in res.trades.itertuples():
+        assert w.loc[t.entry, t.asset] <= config.MAX_POSITION_WEIGHT * (1 + 1e-9)
 
 
 def test_portfolio_does_not_peek_at_the_future(demo_prices):

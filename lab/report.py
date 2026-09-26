@@ -187,6 +187,39 @@ def regime_md(ev: AssetEvaluation) -> str:
     return "\n".join(lines)
 
 
+def timing_md(ev: AssetEvaluation) -> list[str]:
+    """The "Timing cost" section: same-close (old, optimistic) vs next-close (the lab's rule) execution."""
+    t = ev.timing
+    if t is None:
+        return []
+    lines = ["### Timing cost (when the trade happens)", "",
+             "The lab decides at a day's close and trades at the **next** day's close. Before session 3 it traded "
+             "at the *same* close it decided on, which you can't do in real life. This table shows the strategy "
+             "both ways (normal costs). Only the next-close numbers are used by the Skeptic.", "",
+             "| Period | Timing | CAGR | Sharpe | Max drawdown | Trades |", "|---|---|---:|---:|---:|---:|"]
+    names = {"same_close": "Same close (old, optimistic)", "next_close": "**Next close (used)**"}
+    for p in ("train", "test", "full"):
+        for ex in ("same_close", "next_close"):
+            r = t.loc[(p, ex)]
+            lines.append(f"| {PERIOD_LABEL[p]} | {names[ex]} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
+                         f"{_pct(r.max_drawdown)} | {int(r.n_trades)} |")
+    lines += ["", timing_sentence(ev), ""]
+    return lines
+
+
+def timing_sentence(ev: AssetEvaluation) -> str:
+    """One plain-English sentence on what the honest timing changed (full period)."""
+    old, new = ev.timing.loc[("full", "same_close")], ev.timing.loc[("full", "next_close")]
+    d_cagr, d_sharpe = new.cagr - old.cagr, new.sharpe - old.sharpe
+    if abs(d_cagr) < 0.0005 and abs(d_sharpe) < 0.005:
+        return ("**What changed:** almost nothing: over the full period, trading a day later left yearly return "
+                f"({_pct(new.cagr)}) and Sharpe ({new.sharpe:.2f}) about the same.")
+    word = "flattered" if d_sharpe < 0 else "understated"
+    return (f"**What changed:** over the full period, trading one close later moved yearly return from "
+            f"{_pct(old.cagr)} to {_pct(new.cagr)} and Sharpe from {old.sharpe:.2f} to {new.sharpe:.2f}, so the old "
+            f"same-close timing {word} this strategy by {abs(d_cagr) * 100:.1f} percentage points a year.")
+
+
 def checklist_md(ev: AssetEvaluation) -> str:
     icon = {"PASS": "✅ PASS", "WARN": "⚠️ WARN", "FAIL": "❌ FAIL", "NEEDS MORE DATA": "❔ NEEDS MORE DATA"}
     lines = ["| # | Check | Result | What the skeptic found |", "|---|---|---|---|"]
@@ -295,13 +328,14 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
              f"| Max position size | {config.MAX_POSITION_WEIGHT:.0%} of the account "
              f"(trimmed back to {config.TRIM_BACK_TO:.0%}) | Capped the size of **{log.sized_by_cap} of {log.entries}** "
              f"entries ({log.sized_by_cap / e:.0%}); trimmed a grown position {log.trims} times | Largest position "
-             f"at any close: {log.max_position_weight:.1%} |",
+             f"at any close: {log.max_position_weight:.1%} (a position found above 20% is trimmed at the next close; "
+             f"{log.days_over_cap} position-days closed above 20%) |",
              f"| Max open positions | {config.MAX_OPEN_POSITIONS} | Blocked {log.blocked_by_max_positions} entries | "
              f"Most open at once: {log.max_open_positions} (only {len(res.weights.columns)} assets, so this rule "
              f"{'can never bind yet' if len(res.weights.columns) <= config.MAX_OPEN_POSITIONS else 'can bind'}) |",
-             f"| Circuit breaker | Stop new trades after a {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} fall from the peak, "
-             f"review for {config.CIRCUIT_BREAKER_REVIEW_DAYS} trading days; stop for good after a "
-             f"{config.CIRCUIT_BREAKER_HARD_STOP:.0%} fall from the all-time high | Blocked {log.blocked_by_breaker} "
+             f"| Circuit breaker | Stop new trades after a {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} fall from the peak "
+             f"until a review (backtest assumption: the review takes {config.CIRCUIT_BREAKER_REVIEW_DAYS} trading days); "
+             f"stop for good after a {config.CIRCUIT_BREAKER_HARD_STOP:.0%} fall from the all-time high | Blocked {log.blocked_by_breaker} "
              f"entries; triggered **{len(log.breaker_events)}** times; hard floor "
              f"{'**HIT on ' + str(log.hard_stop['tripped'].date()) + '**' if log.hard_stop else 'never hit'} | Worst fall: "
              f"{ev.metrics.loc[('full', 'strategy'), 'max_drawdown']:.1%} |", ""]
@@ -310,10 +344,11 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
                   f"({log.hard_stop['drawdown']:.1%} from the all-time high). No new trades were opened after that.**", ""]
     if log.breaker_events:
         lines += ["**⚠️ FLAG FOR REVIEW: the circuit breaker triggered.**", "",
-                  "| Triggered | Fall from peak | Trading resumed |", "|---|---:|---|"]
+                  "| Triggered | Fall from peak | Trading resumed | How |", "|---|---:|---|---|"]
         for b in log.breaker_events:
             lines.append(f"| {b['tripped'].date()} | {b['drawdown']:.1%} | "
-                         f"{b['resumed'].date() if b['resumed'] is not None else 'still paused at end of data'} |")
+                         f"{b['resumed'].date() if b['resumed'] is not None else 'still paused at end of data'} | "
+                         f"{b.get('resumed_by') or '-'} |")
         lines.append("")
     else:
         lines += [f"**Circuit breaker: never triggered.** The account never fell {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} "
@@ -321,13 +356,18 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
     lines += ["**In plain English:** the 1% rule works by choosing the position size so that hitting the stop "
               "(plus the costs of buying and selling) loses about 1% of the account. For these assets the stop "
               "distance was usually under 5%, so the 1% rule would have allowed a position bigger than 20%; the 20% "
-              "cap was then the rule that actually set the size. A loss can exceed 1% if a price gaps straight "
-              "through the stop between closes.", "",
+              "cap was then the rule that actually set the size. Every order fills at the close *after* the "
+              "decision, so a loss can exceed 1% if a price gaps through the stop, or keeps falling for the day "
+              "before the sale fills.", "",
+              f"**Circuit breaker assumption (backtest only):** a person can't press \"reset\" inside a simulation, "
+              f"so after a {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} fall the backtest assumes a review of "
+              f"**{config.CIRCUIT_BREAKER_REVIEW_DAYS} trading days** (about a month; `CIRCUIT_BREAKER_REVIEW_DAYS` in "
+              "`lab/config.py`, chosen by common sense, not by looking at results), then resumes. In paper trading "
+              "nothing restarts by itself: new trades stay blocked until Tessy runs `python reset_circuit_breaker.py "
+              "--who <name> --reason \"...\"`, which is logged in `journal/circuit_breaker_resets.csv`.", "",
               f"**Not yet tested on real data:** the {config.MAX_OPEN_POSITIONS}-position limit (only "
               f"{len(res.weights.columns)} assets so far){' and the circuit breaker (never triggered)' if not log.breaker_events else ''}. "
-              "Both are checked with made-up prices in `tests/test_portfolio.py`. The 1-month automatic restart "
-              "after the 10% breaker is a backtest stand-in for a human review; before any paper trading it must "
-              "become a manual reset that Tessy approves.",
+              "Both are checked with made-up prices in `tests/test_portfolio.py` and `tests/test_breaker.py`.",
               "", f"![Portfolio exposure](portfolio_exposure.png)", ""]
     return "\n".join(lines)
 
@@ -356,7 +396,8 @@ def exposure_chart(ev: AssetEvaluation, path: Path):
 def ground_rules(cash_note: str) -> str:
     return ("**Ground rules applied:** costs of "
             f"{config.COMMISSION:.2%} commission + {config.SLIPPAGE:.2%} slippage on every buy and every sell; "
-            "decisions made at the close from that day's data, with gains and losses counted from the next day; "
+            "each decision is made from a day's closing price and **traded at the next day's close** (so gains and "
+            "losses start the day after that); "
             "parameters chosen on 2005-2017 only; 2018+ used once as the out-of-sample test. " + cash_note)
 
 
@@ -390,7 +431,7 @@ def _asset_section(ev: AssetEvaluation, out_dir: Path) -> list[str]:
             "Each cell re-runs the strategy with different settings on 2005-2017 data and shows its Sharpe "
             "ratio. A robust idea looks like a smooth hill; an overfit one looks like a lone bright spot.", "",
             f"![{ev.ticker} sensitivity]({t}_sensitivity.png)", "",
-            "### Stress periods", "", regime_md(ev), ""]
+            "### Stress periods", "", regime_md(ev), ""] + timing_md(ev)
 
 
 def _header(title: str, rule: str, evaluations, overall, sources, cash_ok: bool) -> list[str]:

@@ -13,7 +13,9 @@ Turn one written rule into working, well-commented code, then run it.
    (copy the layout of `strategies/ma_trend.py`).
    - `generate_signals(prices)` returns a Series of 0 (cash) or 1 (invested), one value per day.
    - The signal for day *t* may only use prices up to and including day *t*'s close.
-     The backtester trades on the *next* day, so do not shift signals yourself.
+     The backtester trades at the *next* day's close (config.EXECUTION = "next_close"), so do not
+     shift signals yourself. Never use `execution="same_close"` to judge a strategy: it exists only for
+     the report's "Timing cost" table.
    - Return NaN during the warm-up period (for example, the first 200 days of a 200-day average).
    - Implement `sensitivity_grid()` with the two most important parameters and nearby values.
 2. Register the strategy in `run_lab.py`.

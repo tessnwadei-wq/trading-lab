@@ -13,7 +13,8 @@ be encouraging. It is to find the reason the result is wrong. A strategy that su
 1. Run `python run_lab.py --strategy <name>` (this runs the automated checks in `lab/skeptic.py`).
 2. Read the generated `reports/<name>/report.md` and answer all 9 checklist items:
    1. Look-ahead bias: does any signal use data not available at the time of the trade? Read the strategy code
-      yourself as well; the automated truncation test catches most, not all, cases.
+      yourself as well; the automated truncation test catches most, not all, cases. The automated check also
+      runs a trade-timing test: trades must happen at the close AFTER the decision, never the same close.
    2. Out-of-sample: 2018+ vs training period.
    3. Beats the simple alternatives: after costs (normal and double), does it beat buy-and-hold, the broad index
       and the same-risk mix? Say exactly which comparison failed and by how much.
