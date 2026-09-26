@@ -40,3 +40,27 @@ Re-run both strategies on real data (see README "How to run"), then log the real
 3. **Risk rules shrink drawdowns by shrinking exposure.** With 3 assets and a 20% cap, the portfolio is never more than
    ~60% invested, so its returns look like a cautious mix.
 4. **A big jump from training to test is a warning, not a win** (XIU.TO 0.16 → 0.68).
+
+---
+
+## Update, 2026-09-26 (session 3: honest trade timing)
+
+*Added underneath; earlier sections are kept as written.*
+
+**Experiments this month so far:** 8 (2 synthetic, 6 real). **PASS 0 · FAIL 8 · NEEDS MORE DATA 0.**
+**Ideas tested on real data:** still 3 (these are re-runs of the same ideas under a corrected engine, not new ideas);
+**3,843 parameter combinations** in `trials.csv` (unchanged). **Test-period looks:** ma_trend 3, overfit_demo 3,
+portfolio_ma_trend 4 (see `test_period_looks.csv`; the earlier ones were backfilled from this journal).
+
+| Date | Strategy | Verdict | One-line reason |
+|---|---|---|---|
+| 2026-09-26 | ma_trend (v3) | FAIL | Trading a day later cost ~0.6 points a year; now loses all six "simple alternative" comparisons on both assets. |
+| 2026-09-26 | overfit_demo (v3) | FAIL | The search picked new winners; the SPY one collapsed out of sample (0.86 → 0.26) on 16 trades. |
+| 2026-09-26 | portfolio_ma_trend (v3) | FAIL | Loses to equal-weight buy-and-hold and now to the same-risk mix even at normal costs; still BLOCKED for paper trading. |
+
+### Top lessons (session 3)
+1. **You can't trade at the price you used to decide.** Trading at the next close is the honest default, and it
+   removed the 200-day rule's small edge over the same-risk mix.
+2. **Count looks, not just tries.** Every view of the test period is now logged; ours were 2-4 per idea, not 1.
+3. **Rules need to be written for how trading actually works.** With next-day fills, the 1% and 20% limits can be
+   overshot for a day, so their wording and alerts need to say so.

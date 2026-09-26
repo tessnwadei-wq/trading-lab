@@ -146,7 +146,9 @@ def search_note(ticker, fitted) -> str:
     return (f"**Parameter search on {ticker} (training data only):** tried **{len(table):,} combinations** "
             f"and kept the best: `{fitted.label()}`, training Sharpe {best:.2f}. The median combination "
             f"scored {median:.2f}. Picking the top of {len(table):,} tries almost guarantees a lucky winner; "
-            "the question is whether it holds up in 2018+.")
+            "the question is whether it holds up in 2018+. (The search scores every combination with next-close "
+            "timing, so the winner is picked to suit it: in the *Timing cost* table below, its same-close row is not "
+            "a fair \"before\".)")
 
 
 if __name__ == "__main__":

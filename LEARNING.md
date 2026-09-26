@@ -78,9 +78,35 @@ A -50% drawdown needs a +100% gain to recover, which is why drawdowns matter so 
 ## The Skeptic's concepts
 
 **Look-ahead bias**: Accidentally using information you wouldn't have had at the time, e.g. deciding on
-Monday using Tuesday's price. It makes backtests look amazing and is the #1 beginner mistake. The lab prevents it
-by acting one day *after* each decision, and tests for it with a **truncation test**: hide the future and check that
-no past decision changes.
+Monday using Tuesday's price. It makes backtests look amazing and is the #1 beginner mistake. It can hide in two
+places: in the *rule* (a signal that reads future prices) and in the *engine* (trading at a price you only knew after
+deciding, see **Execution timing** below). The lab tests both. The **truncation test** hides the future and checks
+that no past decision changes. The **trade-timing test** (added in session 3) changes one day's closing price and
+checks that what was held right after that close doesn't change, which proves the trade happened at a *later* close
+than the decision.
+
+**Execution timing (same close vs next close)**: *When* a trade happens relative to the decision. The lab only has
+one price per day, the close. A rule like "buy when the price closes above its 200-day average" can only be checked
+once that close is known, and by then the market has shut. So the lab now decides at day t's close and trades at
+**day t+1's close** ("next close"); gains or losses start the day after that. In real life you'd do this with a
+**market-on-close order** (an order to buy or sell at whatever the closing price turns out to be).
+Until session 3 the lab traded at the *same* close it decided on ("same close"). That setting is kept only for the
+*Timing cost* table in each report.
+
+**Why same-close is optimistic**: Trading at the very price you used to decide is like betting on a race after
+seeing the finish photo: you always get in right at the turning point. With next-close timing you get the price one
+day later, which is usually a bit worse, because trend rules switch exactly when the price has just moved. For the
+200-day rule this cost about 0.5-0.7 percentage points a year, and it wiped out the rule's small lead over the
+same-risk mix. Rule of thumb: the gap between the two timings shows how much a strategy relies on perfect timing.
+If a strategy only works with same-close timing, it doesn't work.
+
+**Test-period looks**: Every time anyone sees an idea's 2018+ results during development, that's a "look" at the
+test period. The rule is *one look per idea*, because if you look, change something, and look again, the test data
+starts to become training data without anyone noticing. The lab logs every look (date and reason) in
+`journal/test_period_looks.csv`, and every report shows the count. `python run_lab.py --reason "..."` logs a look
+automatically; re-running with nothing changed shows identical numbers and isn't counted again. More than one look
+doesn't fail a strategy, but it's a warning that the test isn't completely fresh any more. A strategy *changed
+because of* a look must be treated as a brand-new idea.
 
 **In-sample / training period**: The data you're allowed to study and tune on (here, 2005–2017).
 
@@ -188,16 +214,33 @@ market and be needlessly loose in a calm one. In practice, for SPY/XIU.TO/GLD th
 so the 1% rule would allow 25-50% positions and the 20% cap below does the limiting instead.
 
 **Gap**: When a price jumps between one close and the next, skipping over the stop. The loss can then be bigger than
-planned. The lab only checks stops at the close, so the report shows the worst real loss per trade.
+planned. The lab only checks stops at the close, and (with next-close timing) sells at the *following* close, so a
+price that keeps falling for that extra day also adds to the loss. The report shows the worst real loss per trade.
+
+**Order / fill**: An *order* is an instruction to buy or sell; it is *filled* when the trade actually happens. In the
+lab every decision at a close becomes an order that fills at the next close. That's why a position can sit slightly
+above the 20% cap for one day: it's found above 20% at one close and trimmed at the next.
 
 **Max position size / max open positions**: No more than 20% of the account in one position and no more than 5
 positions at once. A position that grows past 20% is **trimmed** (partly sold) back to 18%. The small buffer
 avoids selling a sliver every day.
 
 **Drawdown circuit breaker**: An automatic "stop and think" switch. If the account falls 10% from its peak, the
-lab opens no new trades, logs it, and flags it for review in the report. In a backtest nobody can do the review,
-so the lab simulates it as a ~1-month (21 trading-day) pause, after which trading resumes and the current value
-counts as the new peak. Existing positions keep their normal exits.
+lab opens no new trades, logs it, and flags it for review in the report. Existing positions keep their normal exits.
+A **hard floor** also stops new trades if the account is ever 20% below its all-time high, so several 10% falls in a
+row can't quietly add up.
+
+**Circuit breaker manual reset**: In paper trading (a later phase) the breaker **never restarts by itself**. After
+it trips, no new trades are opened until a person has reviewed what happened and runs
+`python reset_circuit_breaker.py --who Tessy --reason "what I checked"`. The reset is refused without a name and a
+reason, and every reset is written to `journal/circuit_breaker_resets.csv` (when, who, why, and what tripped it).
+This matters because an automatic restart means nobody ever actually looks. A backtest can't wait for a person, so
+there the lab makes an explicit **modelling assumption**: the review takes 21 trading days (about a month,
+`CIRCUIT_BREAKER_REVIEW_DAYS` in `lab/config.py`, picked by common sense, not by looking at results), then trading
+resumes and the current value counts as the new peak. Each portfolio report prints this assumption.
+
+**Modelling assumption**: Something a simulation has to assume because it can't happen in a simulation (like a
+person pressing "reset"). Good practice: write it down, choose it before seeing results, and show it in the report.
 
 **Currency-hedged**: Ignoring exchange-rate moves when adding up assets priced in different currencies. The
 portfolio treats XIU.TO (Canadian dollars) this way, which is a simplification.

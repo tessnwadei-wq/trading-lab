@@ -6,3 +6,6 @@ date,idea,reason,logged_by,fingerprint
 2026-09-26,portfolio_ma_trend,"Session 2 look 1 of 3: portfolio engine run before the trim-buffer fix (journal honesty note)",backfilled from journal (session 3),
 2026-09-26,portfolio_ma_trend,"Session 2 look 2 of 3: run before the risk-manager fixes (journal honesty note)",backfilled from journal (session 3),
 2026-09-26,portfolio_ma_trend,"Session 2 look 3 of 3: final run (journal honesty note)",backfilled from journal (session 3),
+2026-09-26,ma_trend,Session 3: re-run of every strategy after the trade-timing fix (next-close execution); no parameters changed,run_lab.py,c632432df9
+2026-09-26,overfit_demo,Session 3: re-run of every strategy after the trade-timing fix (next-close execution); no parameters changed,run_lab.py,a2e3881e30
+2026-09-26,portfolio_ma_trend,Session 3: re-run of every strategy after the trade-timing fix (next-close execution); no parameters changed,run_lab.py,4dfcb3baf1
