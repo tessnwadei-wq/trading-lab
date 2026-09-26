@@ -4,9 +4,8 @@
 # Downloaded prices (re-created automatically)
 data/cache/
 
-# Your own price CSVs are also kept out of git by default (licensing/size).
-# Remove this line if you want to share them.
-data/csv/*.csv
+# Price CSVs in data/csv/ ARE committed (private repo, personal use) so cloud sessions
+# can use real data. Refresh them on your PC with: python run_lab.py --refresh
 
 # Python clutter
 __pycache__/
