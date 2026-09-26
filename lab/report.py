@@ -25,11 +25,20 @@ ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = ROOT / "reports"
 
 # Chart colours: a colour-blind-safe set, one fixed colour per role, same in every chart.
-COLORS = {"strategy": "#2a78d6", "buy_hold": "#eb6834", "index": "#1baf7a"}
+# (Checked with a colour-vision-deficiency validator; every line also gets an end label.)
+COLORS = {"strategy": "#2a78d6", "buy_hold": "#eb6834", "index": "#1baf7a", "mix": "#eda100"}
 SURFACE, INK, INK_2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
 WHO_LABEL = {"strategy": "Strategy", "strategy_2x": "Strategy (double costs)",
-             "buy_hold": "Buy-and-hold", "index": "Broad index (SPY)"}
+             "buy_hold": "Buy-and-hold", "index": "Broad index (SPY)", "mix": "Same-risk mix"}
+
+
+def who_label(ev: AssetEvaluation, who: str) -> str:
+    if who == "buy_hold":
+        return ev.benchmark_name[0].upper() + ev.benchmark_name[1:]
+    if who == "mix":
+        return f"Same-risk mix ({ev.mix_weight:.0%} in, {1 - ev.mix_weight:.0%} cash)"
+    return WHO_LABEL[who]
 PERIOD_LABEL = {"train": "Train 2005-2017", "test": "Test 2018+", "full": "Full period"}
 
 DEMO_BANNER = (
@@ -87,9 +96,9 @@ def equity_chart(ev: AssetEvaluation, path: Path):
     fig, ax = plt.subplots(figsize=(9, 4.2))
     _style(ax, f"{ev.ticker}: growth of $1 (log scale, after costs)")
     labels = []
-    for who in ("index", "buy_hold", "strategy"):
+    for who in ("index", "buy_hold", "mix", "strategy"):
         eq = ev.results[("full", who)].equity
-        ax.plot(eq.index, eq, color=COLORS[who], linewidth=1.6, label=WHO_LABEL[who])
+        ax.plot(eq.index, eq, color=COLORS[who], linewidth=1.6, label=who_label(ev, who))
         labels.append((eq, f"${eq.iloc[-1]:.2f}", COLORS[who]))
     _end_labels(ax, labels)
     ax.set_yscale("log")
@@ -110,7 +119,7 @@ def drawdown_chart(ev: AssetEvaluation, path: Path):
     _style(ax, f"{ev.ticker}: drawdown (how far below the previous high)")
     for who in ("buy_hold", "strategy"):
         dd = drawdown_series(ev.results[("full", who)].equity)
-        ax.plot(dd.index, dd, color=COLORS[who], linewidth=1.3, label=WHO_LABEL[who])
+        ax.plot(dd.index, dd, color=COLORS[who], linewidth=1.3, label=who_label(ev, who))
     ax.axhline(0, color=INK_2, linewidth=0.8)
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
     start, end = ev.periods["full"]
@@ -157,19 +166,20 @@ def _pct(x, d=1):
 
 
 def metrics_table(ev: AssetEvaluation) -> str:
-    lines = ["| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Time in market |",
+    lines = ["| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Avg. share invested |",
              "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for p in ("train", "test", "full"):
-        for who in ("strategy", "strategy_2x", "buy_hold", "index"):
+        for who in ("strategy", "strategy_2x", "buy_hold", "index", "mix"):
             r = ev.metrics.loc[(p, who)]
-            lines.append(f"| {PERIOD_LABEL[p]} | {WHO_LABEL[who]} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
+            lines.append(f"| {PERIOD_LABEL[p]} | {who_label(ev, who)} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
                          f"{_pct(r.max_drawdown)} | {_pct(r.volatility)} | {int(r.n_trades)} | "
                          f"{_pct(r.win_rate, 0) if who.startswith('strategy') else '-'} | {_pct(r.time_in_market, 0)} |")
     return "\n".join(lines)
 
 
 def regime_md(ev: AssetEvaluation) -> str:
-    lines = ["| Stress period | Strategy return | Buy-and-hold return | Strategy worst fall | Buy-and-hold worst fall |",
+    bh = who_label(ev, "buy_hold")
+    lines = [f"| Stress period | Strategy return | {bh} return | Strategy worst fall | {bh} worst fall |",
              "|---|---:|---:|---:|---:|"]
     for r in ev.regimes.itertuples():
         lines.append(f"| {r.period} | {_pct(r.strategy_return)} | {_pct(r.buy_hold_return)} | "
@@ -178,11 +188,11 @@ def regime_md(ev: AssetEvaluation) -> str:
 
 
 def checklist_md(ev: AssetEvaluation) -> str:
-    icon = {"PASS": "✅ PASS", "FAIL": "❌ FAIL", "NEEDS MORE DATA": "⚠️ NEEDS MORE DATA"}
+    icon = {"PASS": "✅ PASS", "WARN": "⚠️ WARN", "FAIL": "❌ FAIL", "NEEDS MORE DATA": "❔ NEEDS MORE DATA"}
     lines = ["| # | Check | Result | What the skeptic found |", "|---|---|---|---|"]
     for c in ev.checks:
         lines.append(f"| {c.number} | {c.name} | {icon[c.status]} | {c.finding} |")
-    lines.append(f"| 8 | **Verdict** | **{icon[ev.verdict]}** | {ev.reason} |")
+    lines.append(f"| {len(ev.checks) + 1} | **Verdict** | **{icon[ev.verdict]}** | {ev.reason} |")
     return "\n".join(lines)
 
 
@@ -234,50 +244,207 @@ def markets_section(prices: dict) -> str:
 
 
 # --------------------------------------------------------------------------------------
+# Over-search counter and risk manager sections
+# --------------------------------------------------------------------------------------
+def trials_section(evaluations: list[AssetEvaluation], idea: str, is_demo: bool) -> str:
+    from lab import trials
+
+    lab_total = trials.totals()
+    lines = ["## Over-search counter", "",
+             "The more things you try, the more likely your best result is luck. The lab counts every "
+             "parameter combination and idea ever tested on real data in "
+             "[`journal/trials.csv`](../../journal/trials.csv).", "",
+             f"**Lab-wide so far:** {lab_total['ideas']} ideas, {lab_total['configurations']:,} parameter "
+             "combinations tested.", ""]
+    if is_demo:
+        return "\n".join(lines + ["*(Demo data: practice runs aren't counted and no luck check is made.)*", ""])
+    lines += ["| Tested on | Tries for this idea | Training Sharpe | Luck bar (this idea) | Rough chance it's real | "
+              "Luck bar (whole lab) |", "|---|---:|---:|---:|---:|---:|"]
+    for ev in evaluations:
+        s, e = ev.periods["train"]
+        years = (pd.Timestamp(e) - pd.Timestamp(s)).days / 365.25
+        n = max(trials.trials_for(idea, ev.ticker), 1)
+        sr = ev.metrics.loc[("train", "strategy"), "sharpe"]
+        lines.append(f"| {ev.ticker} | {n:,} | {sr:.2f} | {trials.luck_bar(n, years):.2f} | "
+                     f"{trials.chance_real(sr, n, years):.0%} | "
+                     f"{trials.luck_bar(max(lab_total['configurations'], 1), years):.2f} |")
+    lines += ["", "**Reading this:** the *luck bar* is the Sharpe ratio the luckiest of that many *useless* "
+              "strategies would be expected to show over the training years, by chance alone. A result below "
+              "its bar is what luck alone would produce. *Rough chance it's real* compares the training Sharpe "
+              "with the bar (a simplified \"deflated Sharpe ratio\"; see LEARNING.md). The whole-lab bar is "
+              "stricter: it asks \"if this were the best of everything the lab ever tried, would it stand out?\"", ""]
+    return "\n".join(lines)
+
+
+def risk_manager_section(ev: AssetEvaluation) -> str:
+    res = ev.results[("full", "strategy")]
+    log = res.risk
+    closed = res.trades[res.trades["closed"]]
+    e = max(log.entries, 1)
+    stops = closed[closed["reason"] == "stop"]
+    lines = ["## Risk manager", "",
+             "The portfolio enforces the CLAUDE.md risk rules in code (`lab/portfolio.py`). Numbers are for the "
+             "full period at normal costs.", "",
+             "| Rule | Setting | How often it limited a trade | Worst case seen |", "|---|---|---|---|",
+             f"| Max risk per trade | {config.MAX_RISK_PER_TRADE:.0%} of the account (costs included), with a stop "
+             f"{config.STOP_ATR_MULTIPLE:g} × the {config.STOP_ATR_DAYS}-day average daily move below entry | "
+             f"Set the size of **{log.sized_by_risk_rule} of {log.entries}** entries ({log.sized_by_risk_rule / e:.0%}); "
+             f"the stop closed {log.stop_exits} trades | Worst closed trade lost "
+             f"{-log.worst_trade_loss:.2%} of the account"
+             + (f" (stop-outs averaged {-stops['loss_of_account'].mean():.2%})" if len(stops) else "") + " |",
+             f"| Max position size | {config.MAX_POSITION_WEIGHT:.0%} of the account "
+             f"(trimmed back to {config.TRIM_BACK_TO:.0%}) | Capped the size of **{log.sized_by_cap} of {log.entries}** "
+             f"entries ({log.sized_by_cap / e:.0%}); trimmed a grown position {log.trims} times | Largest position "
+             f"at any close: {log.max_position_weight:.1%} |",
+             f"| Max open positions | {config.MAX_OPEN_POSITIONS} | Blocked {log.blocked_by_max_positions} entries | "
+             f"Most open at once: {log.max_open_positions} (only {len(res.weights.columns)} assets, so this rule "
+             f"{'can never bind yet' if len(res.weights.columns) <= config.MAX_OPEN_POSITIONS else 'can bind'}) |",
+             f"| Circuit breaker | Stop new trades after a {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} fall from the peak, "
+             f"review for {config.CIRCUIT_BREAKER_REVIEW_DAYS} trading days; stop for good after a "
+             f"{config.CIRCUIT_BREAKER_HARD_STOP:.0%} fall from the all-time high | Blocked {log.blocked_by_breaker} "
+             f"entries; triggered **{len(log.breaker_events)}** times; hard floor "
+             f"{'**HIT on ' + str(log.hard_stop['tripped'].date()) + '**' if log.hard_stop else 'never hit'} | Worst fall: "
+             f"{ev.metrics.loc[('full', 'strategy'), 'max_drawdown']:.1%} |", ""]
+    if log.hard_stop:
+        lines += [f"**🛑 FLAG FOR REVIEW: the hard floor was hit on {log.hard_stop['tripped'].date()} "
+                  f"({log.hard_stop['drawdown']:.1%} from the all-time high). No new trades were opened after that.**", ""]
+    if log.breaker_events:
+        lines += ["**⚠️ FLAG FOR REVIEW: the circuit breaker triggered.**", "",
+                  "| Triggered | Fall from peak | Trading resumed |", "|---|---:|---|"]
+        for b in log.breaker_events:
+            lines.append(f"| {b['tripped'].date()} | {b['drawdown']:.1%} | "
+                         f"{b['resumed'].date() if b['resumed'] is not None else 'still paused at end of data'} |")
+        lines.append("")
+    else:
+        lines += [f"**Circuit breaker: never triggered.** The account never fell {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} "
+                  "from its peak.", ""]
+    lines += ["**In plain English:** the 1% rule works by choosing the position size so that hitting the stop "
+              "(plus the costs of buying and selling) loses about 1% of the account. For these assets the stop "
+              "distance was usually under 5%, so the 1% rule would have allowed a position bigger than 20%; the 20% "
+              "cap was then the rule that actually set the size. A loss can exceed 1% if a price gaps straight "
+              "through the stop between closes.", "",
+              f"**Not yet tested on real data:** the {config.MAX_OPEN_POSITIONS}-position limit (only "
+              f"{len(res.weights.columns)} assets so far){' and the circuit breaker (never triggered)' if not log.breaker_events else ''}. "
+              "Both are checked with made-up prices in `tests/test_portfolio.py`. The 1-month automatic restart "
+              "after the 10% breaker is a backtest stand-in for a human review; before any paper trading it must "
+              "become a manual reset that Tessy approves.",
+              "", f"![Portfolio exposure](portfolio_exposure.png)", ""]
+    return "\n".join(lines)
+
+
+def exposure_chart(ev: AssetEvaluation, path: Path):
+    """Stacked area: share of the account in each asset over time (the rest is cash)."""
+    w = ev.results[("full", "strategy")].weights
+    fig, ax = plt.subplots(figsize=(9, 3.4))
+    _style(ax, "Portfolio: share of the account in each asset (the rest is cash)")
+    colors = [COLORS["strategy"], COLORS["buy_hold"], COLORS["index"], COLORS["mix"]]
+    ax.stackplot(w.index, w.T.to_numpy(), labels=list(w.columns), colors=colors[:len(w.columns)],
+                 edgecolor=SURFACE, linewidth=0.3)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    ax.set_ylim(0, 1)
+    start, end = ev.periods["full"]
+    _shade_test(ax, start - pd.Timedelta(days=60), end + pd.Timedelta(days=60))
+    ax.legend(frameon=False, fontsize=9, loc="upper left", bbox_to_anchor=(0, 0.93), ncol=len(w.columns))
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------------------
 # The full report
 # --------------------------------------------------------------------------------------
+def ground_rules(cash_note: str) -> str:
+    return ("**Ground rules applied:** costs of "
+            f"{config.COMMISSION:.2%} commission + {config.SLIPPAGE:.2%} slippage on every buy and every sell; "
+            "decisions made at the close from that day's data, with gains and losses counted from the next day; "
+            "parameters chosen on 2005-2017 only; 2018+ used once as the out-of-sample test. " + cash_note)
+
+
+CASH_NOTE_OK = ("Money in cash earns the 13-week US T-bill rate (^IRX), used for every asset including XIU.TO "
+                "(a simplification), and Sharpe ratios measure return *above* that cash rate.")
+CASH_NOTE_MISSING = ("**⚠️ Cash interest data (^IRX) was missing, so cash earned 0% and Sharpe ratios use a 0% cash "
+                     "rate.** Run `python run_lab.py --refresh` to fetch data/csv/IRX.csv.")
+
+
+def _asset_section(ev: AssetEvaluation, out_dir: Path) -> list[str]:
+    t = ev.ticker.replace("=", "_")
+    equity_chart(ev, out_dir / f"{t}_equity.png")
+    drawdown_chart(ev, out_dir / f"{t}_drawdown.png")
+    sensitivity_chart(ev, out_dir / f"{t}_sensitivity.png")
+    s, e = ev.periods["test"]
+    mix_note = (f"**Same-risk mix:** {ev.mix_weight:.0%} in {'the assets (equal weights)' if ev.ticker == 'Portfolio' else ev.ticker}"
+                f" and {1 - ev.mix_weight:.0%} in cash earning interest, rebalanced monthly. {ev.mix_weight:.0%} was chosen "
+                "so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. "
+                f"In the test period its volatility was {ev.metrics.loc[('test', 'mix'), 'volatility']:.1%} vs the "
+                f"strategy's {ev.metrics.loc[('test', 'strategy'), 'volatility']:.1%}. If the strategy can't earn more than "
+                "this simple mix, it is just a complicated way of owning less of the asset.")
+    return [f"### Skeptic Checklist", "", checklist_md(ev), "",
+            mix_note, "",
+            "### Equity curve", "",
+            f"![{ev.ticker} equity curve]({t}_equity.png)", "",
+            "### Drawdown", "", f"![{ev.ticker} drawdown]({t}_drawdown.png)", "",
+            "### Metrics", "", metrics_table(ev), "",
+            "*Sharpe = return above the cash rate, per unit of volatility. Avg. share invested = how much of the "
+            "account was in the market on an average day.*", "",
+            "### Parameter sensitivity (training data only)", "",
+            "Each cell re-runs the strategy with different settings on 2005-2017 data and shows its Sharpe "
+            "ratio. A robust idea looks like a smooth hill; an overfit one looks like a lone bright spot.", "",
+            f"![{ev.ticker} sensitivity]({t}_sensitivity.png)", "",
+            "### Stress periods", "", regime_md(ev), ""]
+
+
+def _header(title: str, rule: str, evaluations, overall, sources, cash_ok: bool) -> list[str]:
+    is_demo = any(e.is_demo for e in evaluations)
+    md = [f"# Strategy report: `{title}`", ""]
+    if is_demo:
+        md += [DEMO_BANNER, ""]
+    md += [f"*Generated {date.today().isoformat()} by `python run_lab.py`.*", "",
+           f"**Rule:** {rule}", "",
+           "**Parameters used:** " + "; ".join(f"{e.ticker}: `{e.strategy_label}`" for e in evaluations), "",
+           f"**Overall verdict: {overall}**", "",
+           "| Tested on | Verdict | Why |", "|---|---|---|"]
+    for ev in evaluations:
+        md.append(f"| {ev.ticker} | **{ev.verdict}** | {ev.reason} |")
+    md += ["", ground_rules(CASH_NOTE_OK if cash_ok else CASH_NOTE_MISSING), "",
+           "**Data sources:** " + "; ".join(f"{t}: {s}" for t, s in sources.items()), ""]
+    return md
+
+
 def write_report(strategy, evaluations: list[AssetEvaluation], overall: str, sources: dict,
-                 all_prices: dict, extra_md: str = "") -> Path:
+                 all_prices: dict, extra_md: str = "", cash_ok: bool = True) -> Path:
     out_dir = REPORTS_DIR / strategy.name
     out_dir.mkdir(parents=True, exist_ok=True)
     is_demo = any(e.is_demo for e in evaluations)
 
-    md = [f"# Strategy report: `{strategy.name}`", ""]
-    if is_demo:
-        md += [DEMO_BANNER, ""]
-    md += [f"*Generated {date.today().isoformat()} by `python run_lab.py`.*", "",
-           f"**Rule:** {strategy.description}", "",
-           "**Parameters used:** " + "; ".join(f"{e.ticker}: `{e.strategy_label}`" for e in evaluations), "",
-           f"**Overall verdict: {overall}**", "",
-           "| Asset | Verdict | Why |", "|---|---|---|"]
-    for ev in evaluations:
-        md.append(f"| {ev.ticker} | **{ev.verdict}** | {ev.reason} |")
-    md += ["", "**Ground rules applied:** costs of "
-           f"{config.COMMISSION:.2%} commission + {config.SLIPPAGE:.2%} slippage on every buy and every sell; "
-           "decisions made at the close and acted on the next trading day; parameters chosen on 2005-2017 only; "
-           "2018+ used once as the out-of-sample test.", "",
-           "**Data sources:** " + "; ".join(f"{t}: {s}" for t, s in sources.items()), ""]
+    md = _header(strategy.name, strategy.description, evaluations, overall, sources, cash_ok)
     if extra_md:
         md += [extra_md, ""]
-
     for ev in evaluations:
-        t = ev.ticker.replace("=", "_")
-        equity_chart(ev, out_dir / f"{t}_equity.png")
-        drawdown_chart(ev, out_dir / f"{t}_drawdown.png")
-        sensitivity_chart(ev, out_dir / f"{t}_sensitivity.png")
-        md += [f"## {ev.ticker}: {config.ASSET_NAMES.get(ev.ticker, '')}", "",
-               "### Skeptic Checklist", "", checklist_md(ev), "",
-               "### Equity curve", "",
-               f"![{ev.ticker} equity curve]({t}_equity.png)", "",
-               "### Drawdown", "", f"![{ev.ticker} drawdown]({t}_drawdown.png)", "",
-               "### Metrics", "", metrics_table(ev), "",
-               "### Parameter sensitivity (training data only)", "",
-               "Each cell re-runs the strategy with different settings on 2005-2017 data and shows its Sharpe "
-               "ratio. A robust idea looks like a smooth hill; an overfit one looks like a lone bright spot.", "",
-               f"![{ev.ticker} sensitivity]({t}_sensitivity.png)", "",
-               "### Stress periods", "", regime_md(ev), ""]
+        md += [f"## {ev.ticker}: {config.ASSET_NAMES.get(ev.ticker, '')}", ""] + _asset_section(ev, out_dir)
 
-    md += [markets_section(all_prices), "",
+    md += [trials_section(evaluations, strategy.name, is_demo), "",
+           markets_section(all_prices), "",
+           "---", "*How to read the numbers: see [LEARNING.md](../../LEARNING.md).*", ""]
+    path = out_dir / "report.md"
+    path.write_text("\n".join(md), encoding="utf-8")
+    return path
+
+
+def write_portfolio_report(strategy, ev: AssetEvaluation, sources: dict, cash_ok: bool = True) -> Path:
+    name = f"portfolio_{strategy.name}"
+    out_dir = REPORTS_DIR / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    assets = list(ev.results[("full", "strategy")].weights.columns)
+    rule = (f"{strategy.description} Run on {', '.join(assets)} at the same time as one account, with the "
+            "CLAUDE.md risk rules enforced (see *Risk manager* below).")
+    md = _header(name, rule, [ev], ev.verdict, sources, cash_ok)
+    md += ["**Compared with:** equal-weight buy-and-hold of " + "/".join(assets) + " (1/3 each, rebalanced "
+           "monthly), the broad index (SPY), and a same-risk mix of that equal-weight basket plus cash. "
+           "**Simplification:** XIU.TO is in Canadian dollars and its returns are added as if in the same currency "
+           "(currency moves are ignored).", ""]
+    exposure_chart(ev, out_dir / "portfolio_exposure.png")
+    md += [risk_manager_section(ev), "", "## Portfolio results", ""] + _asset_section(ev, out_dir)
+    md += [trials_section([ev], name, ev.is_demo), "",
            "---", "*How to read the numbers: see [LEARNING.md](../../LEARNING.md).*", ""]
     path = out_dir / "report.md"
     path.write_text("\n".join(md), encoding="utf-8")

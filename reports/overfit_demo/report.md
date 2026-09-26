@@ -8,18 +8,18 @@
 
 **Overall verdict: FAIL**
 
-| Asset | Verdict | Why |
+| Tested on | Verdict | Why |
 |---|---|---|
-| SPY | **FAIL** | It failed 1 of 7 checks. Main problem (costs): after costs it does not beat simply buying and holding, so it isn't earning its complexity. |
-| XIU.TO | **FAIL** | It failed 1 of 7 checks. Main problem (costs): after costs it does not beat simply buying and holding, so it isn't earning its complexity. |
+| SPY | **FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of buy-and-hold at normal costs (Sharpe 0.675 vs 0.677, short by 0.002); the broad index (SPY) at normal costs (Sharpe 0.675 vs 0.677, short by 0.002); buy-and-hold at double costs (Sharpe 0.64 vs 0.68, short by 0.04); the broad index (SPY) at double costs (Sharpe 0.64 vs 0.68, short by 0.04). |
+| XIU.TO | **FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of buy-and-hold at normal costs (Sharpe 0.45 vs 0.67, short by 0.21); the broad index (SPY) at normal costs (Sharpe 0.45 vs 0.68, short by 0.22); the same-risk mix at normal costs (yearly return 8.0% vs 9.2%, short by 1.3 percentage points a year); buy-and-hold at double costs (Sharpe 0.42 vs 0.67, short by 0.25); the broad index (SPY) at double costs (Sharpe 0.42 vs 0.68, short by 0.26); the same-risk mix at double costs (yearly return 7.5% vs 9.2%, short by 1.7 percentage points a year). |
 
-**Ground rules applied:** costs of 0.10% commission + 0.05% slippage on every buy and every sell; decisions made at the close and acted on the next trading day; parameters chosen on 2005-2017 only; 2018+ used once as the out-of-sample test.
+**Ground rules applied:** costs of 0.10% commission + 0.05% slippage on every buy and every sell; decisions made at the close from that day's data, with gains and losses counted from the next day; parameters chosen on 2005-2017 only; 2018+ used once as the out-of-sample test. Money in cash earns the 13-week US T-bill rate (^IRX), used for every asset including XIU.TO (a simplification), and Sharpe ratios measure return *above* that cash rate.
 
-**Data sources:** SPY: downloaded from Yahoo Finance; XIU.TO: downloaded from Yahoo Finance; GLD: downloaded from Yahoo Finance; CAD=X: downloaded from Yahoo Finance
+**Data sources:** SPY: data/csv/SPY.csv; XIU.TO: data/csv/XIU_TO.csv; GLD: data/csv/GLD.csv; CAD=X: data/csv/CAD_X.csv; ^IRX: data/csv/IRX.csv
 
-**Parameter search on SPY (training data only):** tried **1,920 combinations** and kept the best: `overfit_demo(fast=10, slow=150, band=0.02, min_hold=10)`, training Sharpe 0.95. The median combination scored 0.62. Picking the top of 1,920 tries almost guarantees a lucky winner; the question is whether it holds up in 2018+.
+**Parameter search on SPY (training data only):** tried **1,920 combinations** and kept the best: `overfit_demo(fast=10, slow=150, band=0.02, min_hold=10)`, training Sharpe 0.87. The median combination scored 0.56. Picking the top of 1,920 tries almost guarantees a lucky winner; the question is whether it holds up in 2018+.
 
-**Parameter search on XIU.TO (training data only):** tried **1,920 combinations** and kept the best: `overfit_demo(fast=50, slow=80, band=0.0, min_hold=40)`, training Sharpe 0.91. The median combination scored 0.49. Picking the top of 1,920 tries almost guarantees a lucky winner; the question is whether it holds up in 2018+.
+**Parameter search on XIU.TO (training data only):** tried **1,920 combinations** and kept the best: `overfit_demo(fast=50, slow=80, band=0.0, min_hold=40)`, training Sharpe 0.83. The median combination scored 0.41. Picking the top of 1,920 tries almost guarantees a lucky winner; the question is whether it holds up in 2018+.
 
 ## SPY: S&P 500 ETF (US stocks)
 
@@ -28,13 +28,16 @@
 | # | Check | Result | What the skeptic found |
 |---|---|---|---|
 | 1 | Look-ahead bias | ✅ PASS | Signals stayed identical when the future was hidden (6 cut-off dates tested). |
-| 2 | Out-of-sample | ✅ PASS | Sharpe was 0.95 in training (2005-2017) and 0.84 in the 2018+ test. The edge roughly held up on unseen data. |
-| 3 | Costs | ❌ FAIL | Test-period Sharpe after costs 0.84 (double costs 0.80) vs buy-and-hold 0.82 and broad index 0.82. After costs it does not beat simply buying and holding, so it isn't earning its complexity. |
-| 4 | Parameter sensitivity | ✅ PASS | Chosen setting's training Sharpe 0.95; its 8 neighbours: median 0.75, worst 0.55. Nearby settings work too, so it isn't a single magic number. |
+| 2 | Out-of-sample | ✅ PASS | Sharpe was 0.87 in training (2005-2017) and 0.68 in the 2018+ test. The edge roughly held up on unseen data. |
+| 3 | Beats the simple alternatives | ❌ FAIL | Beat the same-risk mix at normal costs (yearly return 10.3% vs 8.9%); the same-risk mix at double costs (yearly return 9.8% vs 8.9%). But fell short of buy-and-hold at normal costs (Sharpe 0.675 vs 0.677, short by 0.002); the broad index (SPY) at normal costs (Sharpe 0.675 vs 0.677, short by 0.002); buy-and-hold at double costs (Sharpe 0.64 vs 0.68, short by 0.04); the broad index (SPY) at double costs (Sharpe 0.64 vs 0.68, short by 0.04). (Same-risk mix = 51% in SPY + 49% in cash, sized on 2005-2017 data.) |
+| 4 | Parameter sensitivity | ✅ PASS | Chosen setting's training Sharpe 0.87; its 8 neighbours: median 0.67, worst 0.48. Nearby settings work too, so it isn't a single magic number. |
 | 5 | Sample size | ✅ PASS | 31 trades in total (13 in the test period). Enough to say something. |
-| 6 | Drawdown | ✅ PASS | Worst fall -14.3% (trough 2023-04-26, took 194 trading days to recover) vs buy-and-hold -55.2%. Shallower than just holding. |
-| 7 | Regime check | ✅ PASS | Strategy vs buy-and-hold: 2008 financial crisis: +0.0% vs -36.9%; 2020 COVID crash year: +13.4% vs +18.2%; 2022 rate-hike bear market: -12.0% vs -18.3%. No stress period where it was worse on both return and drawdown. |
-| 8 | **Verdict** | **❌ FAIL** | It failed 1 of 7 checks. Main problem (costs): after costs it does not beat simply buying and holding, so it isn't earning its complexity. |
+| 6 | Drawdown | ✅ PASS | Worst fall -14.2% (trough 2020-06-11, took 55 trading days to recover) vs buy-and-hold -55.2%. Shallower than just holding. |
+| 7 | Regime check | ✅ PASS | Strategy vs buy-and-hold: 2008 financial crisis: +1.4% vs -36.9%; 2020 COVID crash year: +13.4% vs +18.2%; 2022 rate-hike bear market: -10.4% vs -18.3%. No stress period where it was worse on both return and drawdown. |
+| 8 | Consistency | ✅ PASS | Sharpe went from 0.87 (training) to 0.68 (test), a change of -0.20, within the ±0.4 expected from normal ups and downs. Behaviour was steady. |
+| 9 | **Verdict** | **❌ FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of buy-and-hold at normal costs (Sharpe 0.675 vs 0.677, short by 0.002); the broad index (SPY) at normal costs (Sharpe 0.675 vs 0.677, short by 0.002); buy-and-hold at double costs (Sharpe 0.64 vs 0.68, short by 0.04); the broad index (SPY) at double costs (Sharpe 0.64 vs 0.68, short by 0.04). |
+
+**Same-risk mix:** 51% in SPY and 49% in cash earning interest, rebalanced monthly. 51% was chosen so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. In the test period its volatility was 9.5% vs the strategy's 11.7%. If the strategy can't earn more than this simple mix, it is just a complicated way of owning less of the asset.
 
 ### Equity curve
 
@@ -46,20 +49,25 @@
 
 ### Metrics
 
-| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Time in market |
+| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Avg. share invested |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Train 2005-2017 | Strategy | 9.1% | 0.95 | -9.6% | 9.7% | 19 | 61% | 67% |
-| Train 2005-2017 | Strategy (double costs) | 8.6% | 0.90 | -10.1% | 9.7% | 19 | 61% | 67% |
-| Train 2005-2017 | Buy-and-hold | 8.7% | 0.53 | -55.2% | 19.1% | 1 | - | 100% |
-| Train 2005-2017 | Broad index (SPY) | 8.7% | 0.53 | -55.2% | 19.1% | 1 | - | 100% |
-| Test 2018+ | Strategy | 9.6% | 0.84 | -14.3% | 11.7% | 13 | 50% | 72% |
-| Test 2018+ | Strategy (double costs) | 9.1% | 0.80 | -15.1% | 11.7% | 13 | 50% | 72% |
-| Test 2018+ | Buy-and-hold | 14.6% | 0.82 | -33.7% | 19.0% | 1 | - | 100% |
-| Test 2018+ | Broad index (SPY) | 14.6% | 0.82 | -33.7% | 19.0% | 1 | - | 100% |
-| Full period | Strategy | 9.3% | 0.89 | -14.3% | 10.6% | 31 | 60% | 69% |
-| Full period | Strategy (double costs) | 8.8% | 0.85 | -15.1% | 10.6% | 31 | 60% | 69% |
-| Full period | Buy-and-hold | 11.1% | 0.65 | -55.2% | 19.1% | 1 | - | 100% |
-| Full period | Broad index (SPY) | 11.1% | 0.65 | -55.2% | 19.1% | 1 | - | 100% |
+| Train 2005-2017 | Strategy | 9.5% | 0.87 | -9.1% | 9.7% | 19 | 61% | 67% |
+| Train 2005-2017 | Strategy (double costs) | 9.0% | 0.82 | -9.7% | 9.7% | 19 | 61% | 67% |
+| Train 2005-2017 | Buy-and-hold | 8.7% | 0.47 | -55.2% | 19.1% | 1 | - | 100% |
+| Train 2005-2017 | Broad index (SPY) | 8.7% | 0.47 | -55.2% | 19.1% | 1 | - | 100% |
+| Train 2005-2017 | Same-risk mix (51% in, 49% cash) | 5.1% | 0.46 | -32.1% | 9.5% | 1 | - | 51% |
+| Test 2018+ | Strategy | 10.3% | 0.68 | -14.2% | 11.7% | 13 | 50% | 72% |
+| Test 2018+ | Strategy (double costs) | 9.8% | 0.64 | -14.5% | 11.7% | 13 | 50% | 72% |
+| Test 2018+ | Buy-and-hold | 14.6% | 0.68 | -33.7% | 19.0% | 1 | - | 100% |
+| Test 2018+ | Broad index (SPY) | 14.6% | 0.68 | -33.7% | 19.0% | 1 | - | 100% |
+| Test 2018+ | Same-risk mix (51% in, 49% cash) | 8.9% | 0.67 | -18.0% | 9.5% | 1 | - | 51% |
+| Full period | Strategy | 9.9% | 0.78 | -14.2% | 10.6% | 31 | 60% | 69% |
+| Full period | Strategy (double costs) | 9.4% | 0.74 | -14.5% | 10.6% | 31 | 60% | 69% |
+| Full period | Buy-and-hold | 11.1% | 0.56 | -55.2% | 19.1% | 1 | - | 100% |
+| Full period | Broad index (SPY) | 11.1% | 0.56 | -55.2% | 19.1% | 1 | - | 100% |
+| Full period | Same-risk mix (51% in, 49% cash) | 6.7% | 0.55 | -32.1% | 9.5% | 1 | - | 51% |
+
+*Sharpe = return above the cash rate, per unit of volatility. Avg. share invested = how much of the account was in the market on an average day.*
 
 ### Parameter sensitivity (training data only)
 
@@ -71,9 +79,9 @@ Each cell re-runs the strategy with different settings on 2005-2017 data and sho
 
 | Stress period | Strategy return | Buy-and-hold return | Strategy worst fall | Buy-and-hold worst fall |
 |---|---:|---:|---:|---:|
-| 2008 financial crisis | 0.0% | -36.9% | 0.0% | -47.7% |
-| 2020 COVID crash year | 13.4% | 18.2% | -14.3% | -33.7% |
-| 2022 rate-hike bear market | -12.0% | -18.3% | -12.3% | -24.5% |
+| 2008 financial crisis | 1.4% | -36.9% | 0.0% | -47.7% |
+| 2020 COVID crash year | 13.4% | 18.2% | -14.2% | -33.7% |
+| 2022 rate-hike bear market | -10.4% | -18.3% | -10.9% | -24.5% |
 
 ## XIU.TO: iShares S&P/TSX 60 ETF (Canadian stocks)
 
@@ -82,13 +90,16 @@ Each cell re-runs the strategy with different settings on 2005-2017 data and sho
 | # | Check | Result | What the skeptic found |
 |---|---|---|---|
 | 1 | Look-ahead bias | ✅ PASS | Signals stayed identical when the future was hidden (6 cut-off dates tested). |
-| 2 | Out-of-sample | ✅ PASS | Sharpe was 0.91 in training (2005-2017) and 0.62 in the 2018+ test. The edge roughly held up on unseen data. |
-| 3 | Costs | ❌ FAIL | Test-period Sharpe after costs 0.62 (double costs 0.58) vs buy-and-hold 0.84 and broad index 0.82. After costs it does not beat simply buying and holding, so it isn't earning its complexity. |
-| 4 | Parameter sensitivity | ✅ PASS | Chosen setting's training Sharpe 0.91; its 5 neighbours: median 0.74, worst 0.71. Nearby settings work too, so it isn't a single magic number. |
+| 2 | Out-of-sample | ✅ PASS | Sharpe was 0.83 in training (2005-2017) and 0.45 in the 2018+ test. The edge roughly held up on unseen data. |
+| 3 | Beats the simple alternatives | ❌ FAIL | Fell short of buy-and-hold at normal costs (Sharpe 0.45 vs 0.67, short by 0.21); the broad index (SPY) at normal costs (Sharpe 0.45 vs 0.68, short by 0.22); the same-risk mix at normal costs (yearly return 8.0% vs 9.2%, short by 1.3 percentage points a year); buy-and-hold at double costs (Sharpe 0.42 vs 0.67, short by 0.25); the broad index (SPY) at double costs (Sharpe 0.42 vs 0.68, short by 0.26); the same-risk mix at double costs (yearly return 7.5% vs 9.2%, short by 1.7 percentage points a year). (Same-risk mix = 65% in XIU.TO + 35% in cash, sized on 2005-2017 data.) |
+| 4 | Parameter sensitivity | ✅ PASS | Chosen setting's training Sharpe 0.83; its 5 neighbours: median 0.66, worst 0.62. Nearby settings work too, so it isn't a single magic number. |
 | 5 | Sample size | ✅ PASS | 30 trades in total (13 in the test period). Enough to say something. |
-| 6 | Drawdown | ✅ PASS | Worst fall -33.0% (trough 2020-06-11, took 655 trading days to recover) vs buy-and-hold -47.9%. Shallower than just holding. |
-| 7 | Regime check | ✅ PASS | Strategy vs buy-and-hold: 2008 financial crisis: -1.8% vs -31.2%; 2020 COVID crash year: -24.6% vs +5.1%; 2022 rate-hike bear market: +3.0% vs -6.5%. No stress period where it was worse on both return and drawdown. |
-| 8 | **Verdict** | **❌ FAIL** | It failed 1 of 7 checks. Main problem (costs): after costs it does not beat simply buying and holding, so it isn't earning its complexity. |
+| 6 | Drawdown | ✅ PASS | Worst fall -33.0% (trough 2020-06-11, took 649 trading days to recover) vs buy-and-hold -47.9%. Shallower than just holding. |
+| 7 | Regime check | ✅ PASS | Strategy vs buy-and-hold: 2008 financial crisis: -1.0% vs -31.2%; 2020 COVID crash year: -24.6% vs +5.1%; 2022 rate-hike bear market: +4.0% vs -6.5%. No stress period where it was worse on both return and drawdown. |
+| 8 | Consistency | ✅ PASS | Sharpe went from 0.83 (training) to 0.45 (test), a change of -0.38, within the ±0.4 expected from normal ups and downs. Behaviour was steady. |
+| 9 | **Verdict** | **❌ FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of buy-and-hold at normal costs (Sharpe 0.45 vs 0.67, short by 0.21); the broad index (SPY) at normal costs (Sharpe 0.45 vs 0.68, short by 0.22); the same-risk mix at normal costs (yearly return 8.0% vs 9.2%, short by 1.3 percentage points a year); buy-and-hold at double costs (Sharpe 0.42 vs 0.67, short by 0.25); the broad index (SPY) at double costs (Sharpe 0.42 vs 0.68, short by 0.26); the same-risk mix at double costs (yearly return 7.5% vs 9.2%, short by 1.7 percentage points a year). |
+
+**Same-risk mix:** 65% in XIU.TO and 35% in cash earning interest, rebalanced monthly. 65% was chosen so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. In the test period its volatility was 9.9% vs the strategy's 13.0%. If the strategy can't earn more than this simple mix, it is just a complicated way of owning less of the asset.
 
 ### Equity curve
 
@@ -100,20 +111,25 @@ Each cell re-runs the strategy with different settings on 2005-2017 data and sho
 
 ### Metrics
 
-| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Time in market |
+| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Avg. share invested |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Train 2005-2017 | Strategy | 10.3% | 0.91 | -13.8% | 11.5% | 18 | 59% | 71% |
-| Train 2005-2017 | Strategy (double costs) | 9.8% | 0.87 | -14.3% | 11.5% | 18 | 59% | 71% |
-| Train 2005-2017 | Buy-and-hold | 7.5% | 0.50 | -47.9% | 17.8% | 1 | - | 100% |
-| Train 2005-2017 | Broad index (SPY) | 9.0% | 0.55 | -55.2% | 18.9% | 1 | - | 100% |
-| Test 2018+ | Strategy | 7.4% | 0.62 | -33.0% | 13.0% | 13 | 67% | 79% |
-| Test 2018+ | Strategy (double costs) | 6.9% | 0.58 | -33.2% | 13.0% | 13 | 58% | 79% |
-| Test 2018+ | Buy-and-hold | 12.7% | 0.84 | -35.5% | 15.8% | 1 | - | 100% |
-| Test 2018+ | Broad index (SPY) | 14.6% | 0.82 | -33.7% | 19.0% | 1 | - | 100% |
-| Full period | Strategy | 9.1% | 0.78 | -33.0% | 12.1% | 30 | 66% | 74% |
-| Full period | Strategy (double costs) | 8.6% | 0.75 | -33.2% | 12.1% | 30 | 62% | 74% |
-| Full period | Buy-and-hold | 9.6% | 0.63 | -47.9% | 17.0% | 1 | - | 100% |
-| Full period | Broad index (SPY) | 11.3% | 0.66 | -55.2% | 19.0% | 1 | - | 100% |
+| Train 2005-2017 | Strategy | 10.5% | 0.83 | -13.8% | 11.5% | 18 | 59% | 71% |
+| Train 2005-2017 | Strategy (double costs) | 10.1% | 0.80 | -14.3% | 11.5% | 18 | 59% | 71% |
+| Train 2005-2017 | Buy-and-hold | 7.5% | 0.43 | -47.9% | 17.8% | 1 | - | 100% |
+| Train 2005-2017 | Broad index (SPY) | 9.0% | 0.49 | -55.2% | 18.9% | 1 | - | 100% |
+| Train 2005-2017 | Same-risk mix (65% in, 35% cash) | 5.4% | 0.42 | -33.7% | 11.3% | 1 | - | 65% |
+| Test 2018+ | Strategy | 8.0% | 0.45 | -33.0% | 13.0% | 13 | 67% | 79% |
+| Test 2018+ | Strategy (double costs) | 7.5% | 0.42 | -33.2% | 13.0% | 13 | 58% | 79% |
+| Test 2018+ | Buy-and-hold | 12.7% | 0.67 | -35.5% | 15.8% | 1 | - | 100% |
+| Test 2018+ | Broad index (SPY) | 14.6% | 0.68 | -33.7% | 19.0% | 1 | - | 100% |
+| Test 2018+ | Same-risk mix (65% in, 35% cash) | 9.2% | 0.68 | -23.5% | 9.9% | 1 | - | 65% |
+| Full period | Strategy | 9.5% | 0.67 | -33.0% | 12.1% | 30 | 66% | 74% |
+| Full period | Strategy (double costs) | 9.0% | 0.63 | -33.2% | 12.1% | 30 | 62% | 74% |
+| Full period | Buy-and-hold | 9.6% | 0.52 | -47.9% | 17.0% | 1 | - | 100% |
+| Full period | Broad index (SPY) | 11.3% | 0.57 | -55.2% | 19.0% | 1 | - | 100% |
+| Full period | Same-risk mix (65% in, 35% cash) | 7.0% | 0.52 | -33.7% | 10.8% | 1 | - | 65% |
+
+*Sharpe = return above the cash rate, per unit of volatility. Avg. share invested = how much of the account was in the market on an average day.*
 
 ### Parameter sensitivity (training data only)
 
@@ -125,9 +141,23 @@ Each cell re-runs the strategy with different settings on 2005-2017 data and sho
 
 | Stress period | Strategy return | Buy-and-hold return | Strategy worst fall | Buy-and-hold worst fall |
 |---|---:|---:|---:|---:|
-| 2008 financial crisis | -1.8% | -31.2% | -12.3% | -46.9% |
+| 2008 financial crisis | -1.0% | -31.2% | -12.3% | -46.9% |
 | 2020 COVID crash year | -24.6% | 5.1% | -33.0% | -35.5% |
-| 2022 rate-hike bear market | 3.0% | -6.5% | -9.9% | -16.4% |
+| 2022 rate-hike bear market | 4.0% | -6.5% | -9.9% | -16.4% |
+
+## Over-search counter
+
+The more things you try, the more likely your best result is luck. The lab counts every parameter combination and idea ever tested on real data in [`journal/trials.csv`](../../journal/trials.csv).
+
+**Lab-wide so far:** 3 ideas, 3,843 parameter combinations tested.
+
+| Tested on | Tries for this idea | Training Sharpe | Luck bar (this idea) | Rough chance it's real | Luck bar (whole lab) |
+|---|---:|---:|---:|---:|---:|
+| SPY | 1,920 | 0.87 | 0.98 | 36% | 1.03 |
+| XIU.TO | 1,920 | 0.83 | 0.97 | 32% | 1.02 |
+
+**Reading this:** the *luck bar* is the Sharpe ratio the luckiest of that many *useless* strategies would be expected to show over the training years, by chance alone. A result below its bar is what luck alone would produce. *Rough chance it's real* compares the training Sharpe with the bar (a simplified "deflated Sharpe ratio"; see LEARNING.md). The whole-lab bar is stricter: it asks "if this were the best of everything the lab ever tried, would it stand out?"
+
 
 ## How the markets differ
 

@@ -24,14 +24,19 @@ His ideas go through the same Skeptic Checklist as everyone else's.
 
 1. Look-ahead bias: does any signal use data not available at the time of the trade?
 2. Out-of-sample: how does it perform on 2018+ data vs the training period?
-3. Costs: does it still beat buy-and-hold after costs? At double costs?
+3. Beats the simple alternatives: after costs (normal AND double), does it beat buy-and-hold, the broad index,
+   and the same-risk mix (asset + cash at the strategy's volatility, sized on training data only)?
 4. Parameter sensitivity: do nearby parameter values also work, or only one "magic" value?
 5. Sample size: how many trades? (Under 30 = not enough evidence.)
 6. Drawdown: what's the worst peak-to-trough loss, and how long did recovery take?
 7. Regime check: results in different periods (e.g. 2008, 2020, 2022).
-8. Verdict: PASS / FAIL / NEEDS MORE DATA, with one plain-English sentence why.
+8. Consistency: is the test-period Sharpe very different from training, in either direction? (WARN only.)
+9. Verdict: PASS / FAIL / NEEDS MORE DATA, with one plain-English sentence why.
 
-## Risk rules (enforced in code from phase 2)
+Each check is PASS, WARN or FAIL (or NEEDS MORE DATA). A WARN is reported but does not fail a strategy on its own.
+Sharpe ratios are measured on returns above the cash (T-bill) rate, and cash earns that rate in every backtest.
+
+## Risk rules (enforced in code from phase 2, in `lab/portfolio.py`)
 
 - Max 1% of account at risk per trade.
 - Max 5 open positions; max 20% of account in any single position.
@@ -47,6 +52,9 @@ His ideas go through the same Skeptic Checklist as everyone else's.
 
 - `lab/` is the engine: data, backtest, metrics, skeptic, report. `strategies/` holds one file per strategy.
 - `python run_lab.py` runs every strategy end to end and writes `reports/<strategy>/report.md`.
-- The data split and cost defaults live in `lab/config.py`. Change them there, nowhere else.
+- The data split, cost defaults and risk settings live in `lab/config.py`. Change them there, nowhere else.
+- Prices live in `data/csv/` and are committed. `python run_lab.py --refresh` re-downloads and overwrites them.
+- `lab/portfolio.py` runs a strategy on SPY, XIU.TO and GLD as one account with the risk rules enforced.
+- Every real-data test is counted in `journal/trials.csv` (the over-search counter). Never delete rows.
 - Experiments are logged in `journal/` (see `journal/README.md` for the format).
 - Run `python -m pytest` before opening a pull request. It must pass.

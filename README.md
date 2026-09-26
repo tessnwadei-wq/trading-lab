@@ -10,24 +10,32 @@ A personal, rules-based **trading research lab** for learning. It tests trading 
 | Folder / file | What it is |
 |---|---|
 | `run_lab.py` | The one command you run. Loads prices, tests every strategy, writes reports. |
-| `lab/data.py` | Gets daily prices (Yahoo Finance → Stooq → your own CSV files) and caches them. |
-| `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs. |
-| `lab/metrics.py` | Scorecard numbers: yearly growth, worst fall, Sharpe ratio, win rate, etc. |
-| `lab/skeptic.py` | Runs the 8-point Skeptic Checklist and gives a PASS / FAIL / NEEDS MORE DATA verdict. |
+| `data/csv/` | **The price files the lab uses** (SPY, XIU_TO, GLD, CAD_X and IRX), committed to git so everyone gets the same numbers. |
+| `lab/data.py` | Reads `data/csv/`; downloads a missing file (Yahoo Finance → Stooq) and re-downloads everything with `--refresh`. |
+| `lab/cash.py` | Interest on cash: the T-bill rate earned whenever a strategy is out of the market. |
+| `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs and cash interest. |
+| `lab/portfolio.py` | Phase 2: one strategy on several assets as one account, with the CLAUDE.md risk rules enforced. |
+| `lab/metrics.py` | Scorecard numbers: yearly growth, worst fall, Sharpe ratio (above the cash rate), win rate, etc. |
+| `lab/skeptic.py` | Runs the Skeptic Checklist (PASS / WARN / FAIL per check) and gives a PASS / FAIL / NEEDS MORE DATA verdict. |
+| `lab/trials.py` | The over-search counter: how many things the lab has tried (`journal/trials.csv`), and the "luck bar". |
 | `lab/report.py` | Writes `reports/<strategy>/report.md` with charts. |
 | `lab/config.py` | The ground rules as numbers: costs, the 2018 train/test split, the assets. |
 | `strategies/` | One file per trading idea. `ma_trend.py` is the simple example; `overfit_demo.py` shows what *not* to do. |
 | `reports/` | The generated reports. Start here to see results. |
 | `journal/` | A diary of every experiment: idea, result, verdict, lesson. |
 | `tests/` | Automatic checks that the lab itself works (especially that nothing "peeks at the future"). |
+| `.github/workflows/tests.yml` | Runs the tests automatically on GitHub for every pull request (offline, never downloads). |
 | `LEARNING.md` | Glossary: every concept explained for a beginner. |
 | `.claude/agents/` | Instructions for five AI helper roles: researcher, quant-coder, skeptic, risk-manager, journal-keeper. |
 
-## ⚠️ About the reports currently in `reports/`
-The cloud computer that built this lab was **blocked from downloading prices**, so the reports in this
-first version were made with **synthetic (made-up) practice data**. Every report says so in a banner at the top.
-They prove the machinery works, but they say nothing about real markets. Follow the steps below
-on your own computer to produce real reports. It takes one command once Python is installed.
+## About the data
+Since session 2 the price files live in `data/csv/` **and are committed to git**, so the reports can be
+regenerated anywhere (including on GitHub's test computers) without downloading anything. The files hold
+dividend-adjusted closing prices from Yahoo Finance, from January 2005. `IRX.csv` is different: it's the
+13-week US T-bill interest rate in % a year, which the lab uses as the interest earned on cash.
+
+The files don't update themselves. To bring them up to date, run `python run_lab.py --refresh` (below), look at
+the new reports, and commit the changed files in `data/csv/` so everyone gets the new data.
 
 ## How to run it on Windows (step by step)
 
@@ -58,9 +66,10 @@ Every time after that:
    ```powershell
    python run_lab.py
    ```
-   It downloads prices (first run only; they're cached in `data\cache\`), tests both strategies and
+   It reads the prices in `data\csv\`, tests every strategy (plus the multi-asset portfolio) and
    prints each verdict. Takes under a minute.
-7. **Read the results.** Open `reports\ma_trend\report.md` and `reports\overfit_demo\report.md`.
+7. **Read the results.** Open `reports\ma_trend\report.md`, `reports\overfit_demo\report.md` and
+   `reports\portfolio_ma_trend\report.md`.
    The easiest way to view them nicely: open the folder in [VS Code](https://code.visualstudio.com/)
    and press `Ctrl+Shift+V` on the report, or push to GitHub and view them there.
 8. **Check the lab still works** (do this after any code change):
@@ -71,33 +80,51 @@ Every time after that:
 
 Useful options:
 ```powershell
-python run_lab.py --strategy ma_trend   # just one strategy
-python run_lab.py --refresh             # re-download prices (e.g. to get the latest days)
-python run_lab.py --demo                # practice mode with made-up data
+python run_lab.py --strategy ma_trend            # just one strategy
+python run_lab.py --strategy portfolio_ma_trend  # just the SPY + XIU.TO + GLD portfolio with risk rules
+python run_lab.py --refresh                      # re-download EVERY price file, then run
+python run_lab.py --demo                         # practice mode with made-up data
 ```
+
+**Keeping the data current with `--refresh`.** A normal run always uses the files already in `data\csv\`,
+so without a refresh the data slowly goes stale. `--refresh` re-downloads every ticker (SPY, XIU.TO, GLD,
+CAD=X and the ^IRX cash rate) and **overwrites** its file in `data\csv\`, then runs the lab as usual. If a
+download fails, the old file is kept and you see a `WARNING`. After a refresh, commit the updated
+`data\csv\` files (GitHub Desktop will list them as changed), so the reports and the files match.
+Refreshing adds new days, and Yahoo sometimes revises old ones slightly, so small changes in old results
+are normal. The 2018+ test period grows with every refresh.
+
+**If the cash-rate file (`IRX.csv`) is missing**, the lab still runs but prints a warning, cash earns 0%, and
+reports say so at the top. Fix it with `python run_lab.py --refresh`.
 (On Mac/Linux it's the same, except `python3 -m venv .venv` and `source .venv/bin/activate`.)
 
 ## If the download fails
 
 `run_lab.py` tries Yahoo Finance, then Stooq. If both fail (a firewall, or Yahoo changing its site),
 it tells you exactly which file it needs. You can then download CSV files yourself and drop them into `data\csv\`.
-Your CSV always takes priority over downloads.
+A file in `data\csv\` is always used as-is (unless you pass `--refresh`).
 
 | Asset | Save as | Where to get it |
 |---|---|---|
 | S&P 500 ETF | `data\csv\SPY.csv` | <https://stooq.com/q/d/l/?s=spy.us&i=d> (should download a CSV; if Stooq shows a message instead, use the Yahoo/Investing.com route in the last row) |
 | Gold ETF | `data\csv\GLD.csv` | <https://stooq.com/q/d/l/?s=gld.us&i=d> |
 | USD/CAD | `data\csv\CAD_X.csv` | <https://stooq.com/q/d/l/?s=usdcad&i=d> |
+| 13-week T-bill rate (cash interest) | `data\csv\IRX.csv` | Yahoo Finance: search **^IRX** → *Historical Data* → from 2005 → *Download*. |
 | TSX 60 ETF | `data\csv\XIU_TO.csv` | Yahoo Finance: search **XIU.TO** → *Historical Data* → set dates from 2005 → *Download*. If there's no download button, use Investing.com (free account): search "iShares S&P/TSX 60", *Historical Data*, *Daily*, *Download*. |
 
 Rules for the files:
-- The name must match exactly (note `CAD_X.csv` and `XIU_TO.csv` use an underscore).
+- The name must match exactly (note `CAD_X.csv` and `XIU_TO.csv` use an underscore; the older name `XIU.TO.csv` also works).
 - The file needs a **Date** column and a **Close**, **Adj Close** or **Price** column. Yahoo, Stooq and
   Investing.com formats are all understood. If there's an "Adj Close" column it's used, because it includes dividends.
 - If a CSV has no dividend adjustment, buy-and-hold will look a bit worse than reality (~1.5–3% a year for stock ETFs).
   Note that in the report.
 
 Then just run `python run_lab.py` again.
+
+## Automatic tests on GitHub
+Every pull request runs `python -m pytest` on GitHub's computers (see the **Checks** tab on the pull request). A
+green tick means the lab still works; a red cross means something broke. The tests never use the internet:
+they use the committed files in `data/csv/` or made-up demo data.
 
 ## How a result becomes "approved"
 Only by passing **every** item on the Skeptic Checklist in [CLAUDE.md](CLAUDE.md), on real data,

@@ -11,16 +11,18 @@ be encouraging. It is to find the reason the result is wrong. A strategy that su
 
 ## Your job
 1. Run `python run_lab.py --strategy <name>` (this runs the automated checks in `lab/skeptic.py`).
-2. Read the generated `reports/<name>/report.md` and answer all 8 checklist items:
+2. Read the generated `reports/<name>/report.md` and answer all 9 checklist items:
    1. Look-ahead bias: does any signal use data not available at the time of the trade? Read the strategy code
       yourself as well; the automated truncation test catches most, not all, cases.
    2. Out-of-sample: 2018+ vs training period.
-   3. Costs: does it still beat buy-and-hold after costs? At double costs? Compare against the broad index too.
+   3. Beats the simple alternatives: after costs (normal and double), does it beat buy-and-hold, the broad index
+      and the same-risk mix? Say exactly which comparison failed and by how much.
    4. Parameter sensitivity: do nearby values work, or only one "magic" value?
    5. Sample size: how many trades? Under 30 = not enough evidence.
    6. Drawdown: worst peak-to-trough loss and recovery time.
    7. Regime check: 2008, 2020, 2022.
-   8. Verdict: PASS / FAIL / NEEDS MORE DATA, with one plain-English sentence why.
+   8. Consistency: is test Sharpe very different from training (either direction)? WARN, not FAIL.
+   9. Verdict: PASS / FAIL / NEEDS MORE DATA, with one plain-English sentence why. List any WARNs.
 3. Hunt for things the automation can't see: survivorship bias (assets picked because they did well),
    how many ideas were tried before this one (multiple testing), and whether the data is real or demo data.
 

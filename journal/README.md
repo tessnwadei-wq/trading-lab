@@ -27,3 +27,9 @@ tried is what stops us fooling ourselves with the one that got lucky.
 |---|---|---|---|---|
 | 1 | 2026-09-26 | ma_trend | synthetic | FAIL |
 | 2 | 2026-09-26 | overfit_demo | synthetic | FAIL |
+| 3 | 2026-09-26 | ma_trend (lab v2: cash interest, same-risk mix) | real | FAIL |
+| 4 | 2026-09-26 | overfit_demo (lab v2) | real | FAIL |
+| 5 | 2026-09-26 | portfolio_ma_trend (SPY + XIU.TO + GLD, risk rules) | real | FAIL |
+
+Every parameter combination tested on real data is also counted in [`trials.csv`](trials.csv) (the over-search
+counter). Add rows, never remove them; `run_lab.py` does this automatically.

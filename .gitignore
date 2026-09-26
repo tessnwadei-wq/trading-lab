@@ -1,11 +1,8 @@
 # Secrets: never commit these
 .env
 
-# Downloaded prices (re-created automatically)
+# Scratch space for downloads (the real price files live in data/csv/ and ARE committed)
 data/cache/
-
-# Price CSVs in data/csv/ ARE committed (private repo, personal use) so cloud sessions
-# can use real data. Refresh them on your PC with: python run_lab.py --refresh
 
 # Python clutter
 __pycache__/

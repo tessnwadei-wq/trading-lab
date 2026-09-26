@@ -44,10 +44,11 @@ class Strategy:
         """
         return {}
 
-    def fit(self, train_prices: pd.DataFrame) -> "Strategy":
+    def fit(self, train_prices: pd.DataFrame, cash_rate: pd.Series | None = None) -> "Strategy":
         """
         Optional: choose parameters using TRAINING data only. Most strategies don't need
         this and just return themselves. overfit_demo.py uses it to show what not to do.
+        cash_rate is the daily T-bill rate, so any search scores Sharpe the same way the skeptic does.
         """
         return self
 
