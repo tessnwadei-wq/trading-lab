@@ -1,0 +1,204 @@
+"""
+The CLAUDE.md risk rules, one test each. Tiny made-up price paths so every number can be
+checked by hand.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from lab import config
+from lab.portfolio import portfolio_lookahead_check, simulate_portfolio
+from strategies.base import Strategy
+from strategies.ma_trend import MATrend
+
+
+class AlwaysIn(Strategy):
+    """Wants to be invested in everything, every day (after a short warm-up)."""
+    name = "always_in"
+
+    def generate_signals(self, prices):
+        s = pd.Series(1.0, index=prices.index)
+        s.iloc[:config.STOP_ATR_DAYS] = np.nan
+        return s
+
+
+def wiggle(n, daily_move, start=100.0, drift=0.0):
+    """Prices that alternate up/down by `daily_move`, so the average daily move is exactly that."""
+    moves = np.where(np.arange(n) % 2 == 0, 1 + daily_move, 1 / (1 + daily_move)) * (1 + drift)
+    return start * np.cumprod(moves)
+
+
+def book(**series):
+    idx = pd.bdate_range("2020-01-01", periods=len(next(iter(series.values()))))
+    return {k: pd.DataFrame({"Close": v}, index=idx) for k, v in series.items()}
+
+
+def run(prices, strategy=None, **kw):
+    return simulate_portfolio(strategy or AlwaysIn(), prices, assets=list(prices), **kw)
+
+
+def test_one_percent_risk_rule_sizes_jumpy_assets_smaller():
+    # A jumpy asset: ~2.5% average daily move -> stop 3 x 2.5% = 7.5% away -> size 1% / 7.5% = 13.3%.
+    prices = book(JUMPY=wiggle(60, 0.025))
+    res = run(prices)
+    move = prices["JUMPY"]["Close"].pct_change().abs().rolling(config.STOP_ATR_DAYS).mean()
+    first_trade = res.trades.iloc[0]
+    distance = config.STOP_ATR_MULTIPLE * move.loc[first_trade.entry]
+    assert res.risk.sized_by_risk_rule == 1 and res.risk.sized_by_cap == 0
+    # The 1% includes the cost of buying and of selling at the stop.
+    c = config.COST_PER_TRADE
+    loss_per_dollar = distance + c + (1 - distance) * c
+    assert first_trade.risk == pytest.approx(config.MAX_RISK_PER_TRADE, rel=1e-3)
+    assert res.weights.loc[first_trade.entry].iloc[0] == pytest.approx(config.MAX_RISK_PER_TRADE / loss_per_dollar,
+                                                                       rel=1e-3)
+
+
+def test_twenty_percent_cap_limits_calm_assets():
+    # A calm asset: 0.2% daily move -> 1% rule would allow 1% / 0.6% = 167%. The cap wins: 20%.
+    res = run(book(CALM=wiggle(60, 0.002)))
+    assert res.risk.sized_by_cap == 1
+    assert res.weights.loc[res.trades.entry.iloc[0]].iloc[0] == pytest.approx(0.20, abs=1e-6)
+    assert res.risk.max_position_weight <= 0.20 + 1e-9
+
+
+def test_position_that_grows_past_twenty_percent_is_trimmed():
+    rising = np.concatenate([wiggle(30, 0.002), wiggle(30, 0.002)[-1] * np.cumprod(np.full(30, 1.02))])
+    res = run(book(UP=rising))
+    assert res.risk.trims >= 1
+    assert res.weights.max().iloc[0] <= 0.20 + 1e-9
+
+
+def test_several_positions_trimmed_on_the_same_day_all_end_at_or_below_twenty_percent():
+    # Found by the risk-manager review: trimming one position pays costs, which shrinks the account and
+    # could push an already-checked position a hair over 20%. Every close must end at or below 20%.
+    base = wiggle(30, 0.002)
+    jump = np.concatenate([base, base[-1] * np.cumprod(np.full(30, 1.03))])
+    other = np.concatenate([base, base[-1] * np.cumprod(np.full(30, 1.025))])
+    res = run(book(A=jump, B=other, C=wiggle(60, 0.002)), cost_multiplier=5)
+    assert res.risk.trims >= 2
+    assert res.risk.max_position_weight <= 0.20 * (1 + 1e-9)
+    assert res.weights.max().max() <= 0.20 * (1 + 1e-9)
+
+
+def test_no_more_than_five_open_positions():
+    prices = book(**{f"A{i}": wiggle(60, 0.002) for i in range(7)})
+    res = run(prices)
+    assert res.risk.max_open_positions == config.MAX_OPEN_POSITIONS
+    assert (res.weights > 0).sum(axis=1).max() == 5
+    assert res.risk.blocked_by_max_positions == 2  # two assets wanted in and were turned away
+
+
+def test_stop_exit_limits_the_loss_to_about_one_percent():
+    calm = wiggle(40, 0.03)                    # jumpy enough that the 1% rule sets the size
+    drop = calm[-1] * np.cumprod(np.full(10, 0.97))  # then a steady slide
+    res = run(book(A=np.concatenate([calm, drop])))
+    stops = res.trades[res.trades.reason == "stop"]
+    assert len(stops) >= 1
+    # A slide of 3% a day can overshoot the stop a little, but not by much.
+    assert -0.015 < stops.loss_of_account.min() < -0.005
+
+
+def test_after_a_stop_we_wait_for_a_fresh_signal():
+    calm = wiggle(40, 0.03)
+    drop = calm[-1] * np.cumprod(np.full(10, 0.97))
+    res = run(book(A=np.concatenate([calm, drop, np.full(20, drop[-1])])))
+    assert (res.trades.reason == "stop").sum() == 1
+    assert len(res.trades) == 1  # AlwaysIn never switches off, so no re-entry
+
+
+def test_circuit_breaker_stops_new_trades_after_ten_percent_fall():
+    n = 120
+    # Five calm assets open on day 21 at 20% each (100% invested). Then all of them gap down 12% in
+    # one day (so the stops can't help): the account drops ~12%. Every position is stopped out.
+    prices = {}
+    for i in range(5):
+        p = wiggle(n, 0.002)
+        p[40:] *= 0.88
+        prices[f"A{i}"] = p
+    res = run(book(**prices))
+    log = res.risk
+    assert len(log.breaker_events) == 1
+    event = log.breaker_events[0]
+    assert event["drawdown"] <= -config.CIRCUIT_BREAKER_DRAWDOWN
+    tripped = res.equity.index.get_loc(event["tripped"])
+    resumed = res.equity.index.get_loc(event["resumed"])
+    assert resumed - tripped == config.CIRCUIT_BREAKER_REVIEW_DAYS
+    # Everything was stopped out in the fall, so nothing is held while the breaker is on.
+    assert (res.weights.iloc[tripped:resumed].sum(axis=1) == 0).all()
+
+
+def test_circuit_breaker_blocks_entries_then_resumes():
+    class InAfterDay45(AlwaysIn):
+        """Like AlwaysIn, but the asset marked 'late' only signals from day 45, after the crash."""
+        def generate_signals(self, prices):
+            s = super().generate_signals(prices)
+            if prices.attrs.get("late"):
+                s.iloc[:45] = 0.0
+            return s
+
+    n = 120
+    prices = {}
+    for i in range(5):
+        p = wiggle(n, 0.002)
+        p[40:] *= 0.88
+        prices[f"A{i}"] = p
+    prices["LATE"] = wiggle(n, 0.002)
+    frames = book(**prices)
+    frames["LATE"].attrs["late"] = True
+    res = run(frames, InAfterDay45())
+    event = res.risk.breaker_events[0]
+    assert res.risk.blocked_by_breaker >= 1              # LATE wanted in while the breaker was on
+    late = res.trades[res.trades.asset == "LATE"]
+    assert len(late) == 1 and late.entry.iloc[0] >= event["resumed"]  # and only got in after the review
+
+
+def test_costs_and_cash_interest_apply_to_the_portfolio():
+    prices = book(A=wiggle(41, 0.002))  # 41 days: ends exactly where it started
+    cash = pd.Series(0.0001, index=prices["A"].index)
+    res = run(prices, cash_rate=cash)
+    # Buying 20% costs 0.15% of 20%; the cash part earns 0.01% a day; the asset ends flat.
+    assert res.risk.entries == 1
+    with_interest = res.equity.iloc[-1]
+    without = run(prices).equity.iloc[-1]
+    assert without == pytest.approx(1 - 0.20 * config.COST_PER_TRADE, rel=1e-4)
+    assert with_interest > without
+
+
+def test_portfolio_does_not_peek_at_the_future(demo_prices):
+    prices = {a: demo_prices[a].loc["2005":"2011"] for a in config.PORTFOLIO_ASSETS}
+    ok, msg = portfolio_lookahead_check(MATrend(), prices, None, config.PORTFOLIO_ASSETS)
+    assert ok, msg
+
+
+def test_window_starts_in_cash_and_counts_entry_costs(demo_prices):
+    prices = {a: demo_prices[a] for a in config.PORTFOLIO_ASSETS}
+    res = simulate_portfolio(MATrend(), prices, start="2015-01-01", end="2015-12-31")
+    assert res.equity.index[0] >= pd.Timestamp("2015-01-01")
+    assert res.returns.iloc[0] == pytest.approx(res.equity.iloc[0] - 1)
+
+
+def test_hard_floor_stops_new_trades_for_good_after_a_twenty_percent_fall():
+    # Five positions at 20% each gap down 12%: the account drops ~12% and the 10% breaker trips.
+    # A month later trading resumes, and a second identical gap takes the total fall past 20%.
+    n = 200
+    prices = {}
+    for i in range(5):
+        p = wiggle(n, 0.002)
+        p[40:] *= 0.88
+        p[100:] *= 0.88
+        prices[f"A{i}"] = p
+    res = run(book(**prices), InAndOut())
+    log = res.risk
+    assert log.hard_stop is not None
+    assert log.hard_stop["drawdown"] <= -config.CIRCUIT_BREAKER_HARD_STOP
+    after = res.trades[res.trades.entry > log.hard_stop["tripped"]]
+    assert after.empty  # nothing opened after the hard floor, even though the signals wanted in
+
+
+class InAndOut(AlwaysIn):
+    """In, except for one day out every 10 days, so a fresh signal keeps coming after stop-outs."""
+    def generate_signals(self, prices):
+        s = super().generate_signals(prices)
+        s.iloc[config.STOP_ATR_DAYS::10] = 0.0
+        return s

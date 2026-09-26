@@ -63,7 +63,7 @@ STRESS = [
 
 @lru_cache(maxsize=1)
 def make_demo_prices(end: str = "2026-09-25") -> dict:
-    """Return {ticker: DataFrame with a 'Close' column} of made-up daily prices."""
+    """Return {ticker: DataFrame with a 'Close' column} of made-up daily prices (plus a made-up ^IRX rate)."""
     rng = np.random.default_rng(SEED)
     dates = pd.bdate_range("2004-01-02", end)  # weekdays only, like a trading calendar
     n, dt = len(dates), 1 / 252
@@ -88,4 +88,19 @@ def make_demo_prices(end: str = "2026-09-25") -> dict:
         daily = (mu + beta * stress_drift) * dt + sigma * vm * np.sqrt(dt) * shocks[:, i]
         close = p0 * np.exp(np.cumsum(daily))
         out[ticker] = pd.DataFrame({"Close": close}, index=pd.DatetimeIndex(dates, name="Date"))
+    out["^IRX"] = _demo_cash_rate(dates)
     return out
+
+
+# A made-up T-bill rate (% per year), loosely shaped like the real one: ~5% before 2008, near 0%
+# after the 2008 and 2020 crises, ~5% again in 2023-24. No randomness, so the other assets are unchanged.
+DEMO_RATES = [("2004", 1.5), ("2005", 3.0), ("2006", 4.7), ("2007", 4.4), ("2008", 1.4), ("2009", 0.1),
+              ("2016", 0.3), ("2017", 0.9), ("2018", 1.9), ("2019", 2.1), ("2020", 0.3), ("2021", 0.05),
+              ("2022", 1.9), ("2023", 5.0), ("2025", 4.2)]
+
+
+def _demo_cash_rate(dates: pd.DatetimeIndex) -> pd.DataFrame:
+    rate = pd.Series(np.nan, index=dates)
+    for year, pct in DEMO_RATES:
+        rate[rate.index >= year] = pct
+    return pd.DataFrame({"Close": rate.to_numpy()}, index=pd.DatetimeIndex(dates, name="Date"))

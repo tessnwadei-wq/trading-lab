@@ -27,17 +27,31 @@ COST_PER_TRADE = COMMISSION + SLIPPAGE  # 0.15% each way
 # ---- Assets ------------------------------------------------------------------
 TRADED_ASSETS = ["SPY", "XIU.TO"]      # strategies are tested on these
 BROAD_INDEX = "SPY"                    # the "broad index" every strategy is compared against
-COMPARISON_ASSETS = ["GLD", "CAD=X"]   # downloaded for the "How the markets differ" section only
+COMPARISON_ASSETS = ["GLD", "CAD=X"]   # used in the "How the markets differ" section (GLD also in the portfolio)
+
+# ---- Cash interest -------------------------------------------------------------
+# Money waiting in cash earns roughly the short-term US Treasury bill rate. We use the
+# 13-week T-bill yield (Yahoo ticker ^IRX, saved as data/csv/IRX.csv), quoted in % a year.
+# SIMPLIFICATION: we use the US rate for every asset, including the Canadian XIU.TO, where a
+# real investor's Canadian-dollar cash would earn the (usually similar) Canadian T-bill rate.
+CASH_TICKER = "^IRX"
 
 ASSET_NAMES = {
     "SPY": "S&P 500 ETF (US stocks)",
     "XIU.TO": "iShares S&P/TSX 60 ETF (Canadian stocks)",
     "GLD": "SPDR Gold ETF (gold)",
     "CAD=X": "USD/CAD exchange rate (Canadian dollars per US dollar)",
+    "^IRX": "13-week US Treasury bill yield (the cash interest rate)",
 }
 
 # ---- Skeptic thresholds --------------------------------------------------------
 MIN_TRADES = 30  # fewer trades than this = not enough evidence
+
+# Consistency check: WARN if the test-period Sharpe differs from the training Sharpe by more
+# than this, in either direction. Why 0.4: a Sharpe measured over ~8-13 years has a margin of
+# error of roughly +/-0.3 each, so two honest measurements of the SAME edge rarely differ by
+# more than ~0.4. A bigger gap suggests the period, not a steady edge, drove the result.
+CONSISTENCY_MAX_SHARPE_GAP = 0.4
 
 # Stress periods for the regime check: (label, start, end)
 REGIMES = [
@@ -47,3 +61,24 @@ REGIMES = [
 ]
 
 TRADING_DAYS_PER_YEAR = 252
+
+# ---- Portfolio and risk rules (CLAUDE.md "Risk rules", enforced in lab/portfolio.py) ----
+PORTFOLIO_ASSETS = ["SPY", "XIU.TO", "GLD"]
+PORTFOLIO_STRATEGIES = ["ma_trend"]       # strategies also run as a multi-asset portfolio
+
+MAX_RISK_PER_TRADE = 0.01        # lose at most 1% of the account if a trade hits its exit
+MAX_POSITION_WEIGHT = 0.20       # at most 20% of the account in any one position
+TRIM_BACK_TO = 0.18              # a position that grows past 20% is cut back to 18%, not 20%, so a
+                                 # rising position isn't trimmed by a sliver (and charged costs) every day
+MAX_OPEN_POSITIONS = 5
+CIRCUIT_BREAKER_DRAWDOWN = 0.10  # after a 10% fall from the peak, open no new trades...
+CIRCUIT_BREAKER_REVIEW_DAYS = 21  # ...for ~1 month (a simulated "review"), then resume from there
+# Hard floor: if the account ever falls 20% below its ALL-TIME high, stop opening trades for good (no
+# automatic restart). In real life only Tessy could restart it. Added after the risk-manager review.
+CIRCUIT_BREAKER_HARD_STOP = 0.20
+
+# The exit distance used to measure risk: a protective stop placed STOP_ATR_MULTIPLE times the
+# "average daily move" (average absolute daily % change over STOP_ATR_DAYS days) below the entry
+# price. 3 x a 20-day average move is a common textbook setting (an ATR stop); it was NOT tuned.
+STOP_ATR_DAYS = 20
+STOP_ATR_MULTIPLE = 3.0

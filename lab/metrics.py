@@ -30,14 +30,23 @@ def volatility(returns: pd.Series) -> float:
     return float(returns.std() * np.sqrt(DAYS))
 
 
-def sharpe(returns: pd.Series) -> float:
+def sharpe(returns: pd.Series, cash_returns: pd.Series | None = None) -> float:
     """
-    Sharpe ratio: return per unit of bumpiness (risk). Higher is better.
+    Sharpe ratio: EXTRA return over cash, per unit of bumpiness (risk). Higher is better.
     Rough guide: below 0.5 weak, around 1 good, above 2 = suspicious in a backtest.
-    (We assume cash earns 0%, to keep it simple.)
+
+    The standard way: subtract what cash (T-bills) paid each day first, because a strategy only
+    deserves credit for what it earned ABOVE the risk-free rate. This is the "excess return".
+    With no cash data, cash counts as 0%.
     """
-    sd = returns.std()
-    return float(returns.mean() / sd * np.sqrt(DAYS)) if sd > 0 else 0.0
+    excess = returns if cash_returns is None else returns - cash_returns.reindex(returns.index).fillna(0.0)
+    sd = excess.std()
+    return float(excess.mean() / sd * np.sqrt(DAYS)) if sd > 0 else 0.0
+
+
+def result_sharpe(result) -> float:
+    """Sharpe ratio of a BacktestResult, measured against the cash it could have earned instead."""
+    return sharpe(result.returns, result.cash_returns)
 
 
 def drawdown_series(equity: pd.Series) -> pd.Series:
@@ -77,11 +86,11 @@ def summarize(result) -> dict:
         "total_return": total_return(eq),
         "cagr": cagr(eq),
         "volatility": volatility(rets),
-        "sharpe": sharpe(rets),
+        "sharpe": result_sharpe(result),
         "max_drawdown": dd["max_dd"],
         "recovery_days": dd["recovery_days"],
         "n_trades": int(len(trades)),
         "win_rate": float((closed["return"] > 0).mean()) if len(closed) else float("nan"),
-        "time_in_market": float(pos.mean()),
+        "time_in_market": float(pos.mean()),  # average share of the account invested
     }
 

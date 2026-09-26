@@ -1,12 +1,8 @@
 # Secrets: never commit these
 .env
 
-# Downloaded prices (re-created automatically)
+# Scratch space for downloads (the real price files live in data/csv/ and ARE committed)
 data/cache/
-
-# Your own price CSVs are also kept out of git by default (licensing/size).
-# Remove this line if you want to share them.
-data/csv/*.csv
 
 # Python clutter
 __pycache__/

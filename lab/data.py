@@ -1,20 +1,20 @@
 """
 Getting daily price data.
 
-Where prices come from, in the order we try them:
-  1. A CSV file you dropped into data/csv/        (you are always in control)
-  2. A cached copy in data/cache/                 (so we don't re-download every run)
-  3. Yahoo Finance via the `yfinance` package     (free, the usual choice)
-  4. Stooq (free backup website)
+data/csv/ is the lab's price store, and it is committed to git so everyone uses the same numbers.
+  * Normal run:        read data/csv/<ticker>.csv. If a file is missing, download it and save it there.
+  * `--refresh` run:   re-download EVERY ticker and overwrite its file in data/csv/ (to get the
+                       latest days). If a download fails, the old file is kept and you get a warning.
+Downloads try Yahoo Finance (the `yfinance` package) first, then Stooq (a free backup website).
 If you pass demo=True we skip all of that and use made-up practice data (see lab/synthetic.py).
 
 Every function returns a pandas DataFrame indexed by date with at least a "Close" column.
 "Close" is the *adjusted* close: it includes dividends, so buy-and-hold is measured fairly.
+(For ^IRX, the T-bill yield, "Close" is the interest rate in % a year, e.g. 4.07.)
 """
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 import pandas as pd
@@ -23,7 +23,7 @@ from lab import config
 
 ROOT = Path(__file__).resolve().parent.parent
 CSV_DIR = ROOT / "data" / "csv"
-CACHE_DIR = ROOT / "data" / "cache"
+TMP_DIR = ROOT / "data" / "cache"  # scratch space for downloads; not committed
 
 # Stooq uses different ticker names from Yahoo.
 STOOQ_SYMBOLS = {"SPY": "spy.us", "GLD": "gld.us", "CAD=X": "usdcad", "XIU.TO": "xiu.ca"}
@@ -34,8 +34,15 @@ class DataUnavailable(RuntimeError):
 
 
 def _file_name(ticker: str) -> str:
-    # "CAD=X" is not a friendly file name on every system, so swap odd characters.
-    return ticker.replace("=", "_").replace("^", "")
+    """CSV file name for a ticker: "CAD=X" -> "CAD_X.csv", "XIU.TO" -> "XIU_TO.csv", "^IRX" -> "IRX.csv"."""
+    return ticker.replace("=", "_").replace(".", "_").replace("^", "") + ".csv"
+
+
+def csv_path(ticker: str) -> Path:
+    """Where this ticker's prices live. Also accepts the older name "XIU.TO.csv" if that's what exists."""
+    path = CSV_DIR / _file_name(ticker)
+    legacy = CSV_DIR / (ticker.replace("=", "_").replace("^", "") + ".csv")
+    return legacy if not path.exists() and legacy.exists() else path
 
 
 def read_price_csv(path: Path) -> pd.DataFrame:
@@ -91,7 +98,7 @@ def _download_stooq(ticker: str, start: str) -> pd.DataFrame:
     resp.raise_for_status()
     if "Date" not in resp.text[:100]:
         raise DataUnavailable(f"Stooq returned no data for {ticker}")
-    tmp = CACHE_DIR / f"_stooq_{_file_name(ticker)}.csv"
+    tmp = TMP_DIR / f"_stooq_{_file_name(ticker)}"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(resp.text)
     df = read_price_csv(tmp)
@@ -99,45 +106,56 @@ def _download_stooq(ticker: str, start: str) -> pd.DataFrame:
     return df.loc[start:]
 
 
-def load_prices(ticker: str, start: str = config.START_DATE, demo: bool = False,
-                refresh: bool = False) -> tuple[pd.DataFrame, str]:
-    """
-    Return (prices, source_description) for one ticker.
+def save_price_csv(df: pd.DataFrame, path: Path) -> None:
+    """Write Date + Close (the only columns the lab uses) so the committed files stay small."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df[["Close"]].to_csv(path, index_label="Date", float_format="%.8g")
 
-    refresh=True ignores the cache and downloads again (e.g. to get the latest days).
-    """
-    if demo:
-        from lab.synthetic import make_demo_prices
-        return make_demo_prices()[ticker].loc[start:], "SYNTHETIC demo data (not real prices)"
 
-    # 1. Your own CSV always wins.
-    csv_path = CSV_DIR / f"{_file_name(ticker)}.csv"
-    if csv_path.exists():
-        return read_price_csv(csv_path).loc[start:], f"your CSV file data/csv/{csv_path.name}"
-
-    # 2. Cache.
-    cache_path = CACHE_DIR / f"{_file_name(ticker)}.csv"
-    if cache_path.exists() and not refresh:
-        return read_price_csv(cache_path).loc[start:], f"cached download data/cache/{cache_path.name}"
-
-    # 3 and 4. Download.
+def _download(ticker: str, start: str) -> tuple[pd.DataFrame, str]:
+    """Try each download source in turn. Returns (prices, source name) or raises DataUnavailable."""
     errors = []
     for name, fetch in (("Yahoo Finance", _download_yahoo), ("Stooq", _download_stooq)):
         try:
             df = fetch(ticker, start)
             if len(df) < 250:
                 raise DataUnavailable(f"only {len(df)} rows")
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            df.to_csv(cache_path)
-            return df, f"downloaded from {name}"
+            return df, name
         except Exception as exc:  # any failure: note it and try the next source
             errors.append(f"{name}: {type(exc).__name__}: {str(exc)[:120]}")
+    raise DataUnavailable("\n  ".join(errors))
 
-    raise DataUnavailable(
-        f"Could not get prices for {ticker}.\n  " + "\n  ".join(errors) +
-        f"\nFix: download a CSV and save it as data/csv/{_file_name(ticker)}.csv "
-        "(see README.md, 'If the download fails'), or run with --demo for practice data."
-    )
+
+def load_prices(ticker: str, start: str = config.START_DATE, demo: bool = False,
+                refresh: bool = False) -> tuple[pd.DataFrame, str]:
+    """
+    Return (prices, source_description) for one ticker.
+
+    refresh=True downloads again and OVERWRITES data/csv/<ticker>.csv (e.g. to get the latest days).
+    """
+    if demo:
+        from lab.synthetic import make_demo_prices
+        return make_demo_prices()[ticker].loc[start:], "SYNTHETIC demo data (not real prices)"
+
+    path = csv_path(ticker)
+    if path.exists() and not refresh:
+        return read_price_csv(path).loc[start:], f"data/csv/{path.name}"
+
+    try:
+        df, source = _download(ticker, start)
+    except DataUnavailable as exc:
+        if path.exists():  # refresh failed: keep using the file we already have
+            print(f"  WARNING: could not refresh {ticker}, keeping the existing data/csv/{path.name}.\n  {exc}")
+            return read_price_csv(path).loc[start:], f"data/csv/{path.name} (refresh FAILED, older data)"
+        raise DataUnavailable(
+            f"Could not get prices for {ticker}.\n  {exc}"
+            f"\nFix: download a CSV and save it as data/csv/{_file_name(ticker)} "
+            "(see README.md, 'If the download fails'), or run with --demo for practice data."
+        ) from None
+
+    new_path = CSV_DIR / _file_name(ticker)
+    save_price_csv(df, new_path)
+    return df, f"data/csv/{new_path.name} (downloaded from {source} today)"
 
 
 def load_all(tickers: list[str], demo: bool = False, refresh: bool = False) -> tuple[dict, dict]:

@@ -1,0 +1,308 @@
+"""
+Portfolio backtest (phase 2): one strategy run across several assets at once, with the
+CLAUDE.md risk rules enforced in code.
+
+How a day works, in plain English (all decisions use closing prices known that day):
+  1. Update each position's value with the day's price move; cash earns the T-bill rate.
+  2. EXITS. Sell a position if its price has fallen to its protective stop (see "risk" below),
+     or if the strategy's signal says "out".
+  3. CIRCUIT BREAKER. If the account is 10% or more below its peak, stop opening new trades
+     and log it. In real life a human would now review what went wrong. Here we simulate that
+     review as a ~1-month pause, after which trading resumes and the current value becomes the
+     new peak. Existing positions keep their normal exits while the breaker is on.
+     HARD FLOOR: if the account is ever 20% below its all-time high, new trades stop for good
+     (no automatic restart), so repeated 10% falls can't quietly add up.
+  4. ENTRIES. For each asset whose signal says "in" and that we don't hold, open a position,
+     unless there are already 5 open or the breaker is on. Its size is the SMALLER of:
+       * the 1% risk rule: size = 1% of the account / (exit distance + buying and selling costs)
+         (so if the stop is hit, we lose about 1% of the account, costs included), and
+       * the 20% cap: 20% of the account.
+  5. TRIMS. If a position has grown to more than 20% of the account, cut it back to 18%. Repeat
+     until none is over 20% (one trim's costs shrink the account and can nudge another over).
+     (Cutting back to exactly 20% would mean selling a sliver, and paying costs, almost every day.)
+
+What "risk" means here (the 1% rule): risk is what we lose if the trade goes wrong and we
+exit. So every trade needs an exit point decided in advance: a protective stop. We place it
+STOP_ATR_MULTIPLE (3) x the asset's "average daily move" below the entry price. The average
+daily move is the average size of the last 20 daily % changes, a close-price version of the
+"Average True Range" (ATR) that traders use.
+Why volatility-based: a fixed distance (say 5%) would be far too tight for a jumpy asset and
+far too loose for a calm one. Tying the distance to how much the asset normally moves means
+calm assets get bigger positions and jumpy assets smaller ones, so each trade risks about
+the same 1%. The stop is fixed at entry (it does not trail the price up).
+After a stop-out we wait for a FRESH signal (the signal must switch off and on again) before
+buying that asset again, otherwise we'd just buy back the next day.
+
+Simplifications (written down so nobody forgets them):
+  * A stop is checked at the close, not during the day. If the price gaps through the stop,
+    the loss can be bigger than 1%. The report shows the worst real loss per trade.
+  * XIU.TO is priced in Canadian dollars. We add up returns as if every asset were in the
+    same currency (like a currency-hedged investor). Currency moves are ignored.
+  * Every asset uses the US T-bill rate for cash (see lab/cash.py).
+  * An asset can only be traded on days its own market was open.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+import pandas as pd
+
+from lab import config
+from lab.backtest import BacktestResult, buy_and_hold, fixed_mix
+from lab.cash import align_cash
+from lab.skeptic import Subject, evaluate_subject, lookahead_check, sensitivity_grid
+
+BENCHMARK_NAME = "equal-weight buy-and-hold"
+
+
+@dataclass
+class RiskLog:
+    """How often each risk rule changed what the strategy wanted to do."""
+    entries: int = 0                  # positions opened
+    sized_by_risk_rule: int = 0       # 1% risk rule gave a size below the 20% cap, so it set the size
+    sized_by_cap: int = 0             # 1% rule would have allowed more than 20%: the cap set the size
+    limited_by_cash: int = 0          # not enough cash left for the full size
+    blocked_by_max_positions: int = 0  # wanted to enter, but 5 positions were already open
+    blocked_by_breaker: int = 0       # wanted to enter, but the circuit breaker was on
+    trims: int = 0                    # a position grew past 20% and was cut back
+    stop_exits: int = 0
+    signal_exits: int = 0
+    max_open_positions: int = 0
+    max_position_weight: float = 0.0  # largest share of the account in one position at a close (market open)
+    worst_trade_loss: float = 0.0     # worst closed-trade loss, as a share of the account at entry
+    breaker_events: list = field(default_factory=list)  # {"tripped", "drawdown", "resumed"}
+    hard_stop: dict = None            # {"tripped", "drawdown"} if the 20% hard floor was ever hit
+
+
+@dataclass
+class PortfolioResult(BacktestResult):
+    risk: RiskLog = None
+    weights: pd.DataFrame = None      # share of the account in each asset, each day
+
+
+def _prepare(strategy, prices: dict, assets: list, cash_rate):
+    """Line every asset up on one calendar. Signals and stop distances use each asset's own history."""
+    raw = pd.DataFrame({a: prices[a]["Close"] for a in assets})
+    traded = raw.notna()
+    closes = raw.ffill()
+    signals = pd.DataFrame({a: strategy.generate_signals(prices[a]) for a in assets})
+    signals = signals.reindex(closes.index).ffill().fillna(0.0)
+    avg_move = pd.DataFrame({a: prices[a]["Close"].pct_change().abs().rolling(config.STOP_ATR_DAYS).mean()
+                             for a in assets}).reindex(closes.index).ffill()
+    return closes, traded, signals, avg_move, align_cash(cash_rate, closes.index)
+
+
+def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = None, start=None, end=None,
+                       cost_multiplier: float = 1.0, assets: list | None = None) -> PortfolioResult:
+    """
+    Run `strategy` on every asset in `assets` as one account that starts with 1.0 in cash.
+
+    Like run_backtest, trades happen at the close of the day the signal is calculated and the
+    measured window starts in cash: the first trades are made at the close just before `start`.
+    """
+    assets = assets or config.PORTFOLIO_ASSETS
+    closes, traded, signals, avg_move, cash = _prepare(strategy, prices, assets, cash_rate)
+
+    # Include the trading day before `start`: that's when the first positions are bought.
+    idx = closes.index
+    i0 = 0 if start is None else max(idx.searchsorted(pd.Timestamp(start)) - 1, 0)
+    i1 = len(idx) if end is None else idx.searchsorted(pd.Timestamp(end), side="right")
+    dates = idx[i0:i1]
+    px, ok, sig = closes.to_numpy()[i0:i1], traded.to_numpy()[i0:i1], signals.to_numpy()[i0:i1]
+    move, cash_r = avg_move.to_numpy()[i0:i1], cash.to_numpy()[i0:i1]
+
+    k = len(assets)
+    rate = config.COST_PER_TRADE * cost_multiplier
+    log = RiskLog()
+    value = [0.0] * k                     # money in each position
+    cash_bal = 1.0
+    held = [False] * k
+    stop = [0.0] * k
+    need_fresh = [False] * k              # after a stop-out, wait for the signal to switch off and on
+    blocked = [False] * k                 # this entry chance was already counted as blocked
+    open_trade = [None] * k               # bookkeeping for the trade list
+    trades = []
+    peak, breaker_on, breaker_until = 1.0, False, 0
+    all_time_high, halted = 1.0, False
+    equity_hist, weight_hist = [], []
+
+    def sell(a, amount, j, reason=None):
+        nonlocal cash_bal
+        cash_bal += amount * (1 - rate)
+        value[a] -= amount
+        open_trade[a]["received"] += amount * (1 - rate)
+        if reason:  # a full exit
+            t = open_trade[a]
+            ret = t["received"] / t["invested"] - 1
+            trades.append({"asset": assets[a], "entry": t["entry"], "exit": dates[j], "return": ret,
+                           "days": j - t["i"], "closed": True, "reason": reason,
+                           "risk": t["risk"], "loss_of_account": (t["received"] - t["invested"]) / t["equity"]})
+            log.worst_trade_loss = min(log.worst_trade_loss, trades[-1]["loss_of_account"])
+            held[a], value[a], open_trade[a] = False, 0.0, None
+
+    for j in range(len(dates)):
+        # 1. Price moves and interest (nothing to do on the very first day: we start in cash).
+        if j > 0:
+            for a in range(k):
+                if held[a]:
+                    value[a] *= px[j, a] / px[j - 1, a]
+            cash_bal *= 1 + cash_r[j]
+
+        # 2. Exits: protective stop first, then the strategy's own "out" signal.
+        for a in range(k):
+            if held[a] and ok[j, a]:
+                if px[j, a] <= stop[a]:
+                    sell(a, value[a], j, "stop")
+                    log.stop_exits += 1
+                    need_fresh[a] = True
+                elif sig[j, a] != 1:
+                    sell(a, value[a], j, "signal")
+                    log.signal_exits += 1
+        for a in range(k):
+            if sig[j, a] != 1:
+                need_fresh[a] = blocked[a] = False
+
+        # 3. Circuit breaker.
+        equity = cash_bal + sum(value)
+        if breaker_on and j >= breaker_until:
+            breaker_on, peak = False, equity
+            log.breaker_events[-1]["resumed"] = dates[j]
+        if not breaker_on:
+            peak = max(peak, equity)
+            if equity <= peak * (1 - config.CIRCUIT_BREAKER_DRAWDOWN):
+                breaker_on, breaker_until = True, j + config.CIRCUIT_BREAKER_REVIEW_DAYS
+                log.breaker_events.append({"tripped": dates[j], "drawdown": equity / peak - 1, "resumed": None})
+        all_time_high = max(all_time_high, equity)
+        if not halted and equity <= all_time_high * (1 - config.CIRCUIT_BREAKER_HARD_STOP):
+            halted = True
+            log.hard_stop = {"tripped": dates[j], "drawdown": equity / all_time_high - 1}
+
+        # 4. Entries.
+        for a in range(k):
+            wants_in = sig[j, a] == 1 and not held[a] and ok[j, a] and not need_fresh[a]
+            if not wants_in or np.isnan(move[j, a]) or move[j, a] <= 0:
+                continue
+            if breaker_on or halted or sum(held) >= config.MAX_OPEN_POSITIONS:
+                if not blocked[a]:
+                    blocked[a] = True
+                    if breaker_on or halted:
+                        log.blocked_by_breaker += 1
+                    else:
+                        log.blocked_by_max_positions += 1
+                continue
+            distance = config.STOP_ATR_MULTIPLE * move[j, a]        # e.g. 3 x 0.8% = 2.4%
+            # Loss per $1 invested if the stop is hit: the price fall, plus the cost to buy and to sell.
+            loss_per_dollar = distance + rate + (1 - distance) * rate  # e.g. 2.4% + 0.15% + 0.15% = 2.7%
+            risk_size = config.MAX_RISK_PER_TRADE / loss_per_dollar  # 1% / 2.7% = 37% of the account
+            if risk_size < config.MAX_POSITION_WEIGHT:
+                size, log.sized_by_risk_rule = risk_size, log.sized_by_risk_rule + 1
+            else:
+                size, log.sized_by_cap = config.MAX_POSITION_WEIGHT, log.sized_by_cap + 1
+            amount = size * equity / (1 + size * rate)  # so it's still <= size AFTER paying the cost
+            if amount * (1 + rate) > cash_bal:
+                amount = max(cash_bal, 0.0) / (1 + rate)
+                log.limited_by_cash += 1
+            if amount <= 0:
+                continue
+            cash_bal -= amount * (1 + rate)
+            value[a], held[a], stop[a] = amount, True, px[j, a] * (1 - distance)
+            open_trade[a] = {"entry": dates[j], "i": j, "invested": amount * (1 + rate), "received": 0.0,
+                             "equity": equity, "risk": amount / equity * loss_per_dollar}
+            log.entries += 1
+            blocked[a] = False
+
+        # 5. Trims: no position may be more than 20% of the account at the close.
+        equity = cash_bal + sum(value)
+        trimmed = True
+        while trimmed:  # repeat: one trim's costs can nudge an already-checked position over 20%
+            trimmed = False
+            for a in range(k):
+                # (1 + 1e-9): ignore rounding dust, so a position bought at exactly 20% isn't trimmed at once.
+                if held[a] and ok[j, a] and value[a] > config.MAX_POSITION_WEIGHT * equity * (1 + 1e-9):
+                    # Sell x so that (value - x) / (equity - x * rate) = TRIM_BACK_TO.
+                    target = config.TRIM_BACK_TO
+                    sell(a, (value[a] - target * equity) / (1 - target * rate), j)
+                    log.trims += 1
+                    equity = cash_bal + sum(value)
+                    trimmed = True
+
+        log.max_open_positions = max(log.max_open_positions, sum(held))
+        if equity > 0:  # only count days the asset's market was open (we can't trade when it's shut)
+            open_values = [value[a] for a in range(k) if ok[j, a]]
+            if open_values:
+                log.max_position_weight = max(log.max_position_weight, max(open_values) / equity)
+        equity_hist.append(equity)
+        weight_hist.append([v / equity for v in value])
+
+    for a in range(k):  # positions still open at the end
+        if held[a]:
+            t = open_trade[a]
+            trades.append({"asset": assets[a], "entry": t["entry"], "exit": dates[-1],
+                           "return": (t["received"] + value[a]) / t["invested"] - 1, "days": len(dates) - 1 - t["i"],
+                           "closed": False, "reason": "still open", "risk": t["risk"], "loss_of_account": np.nan})
+
+    # Report from `start` on (drop the set-up day before it, unless there was none).
+    first = 1 if (start is not None and i0 < idx.searchsorted(pd.Timestamp(start))) else 0
+    equity = pd.Series(equity_hist, index=dates)
+    returns = equity.pct_change()
+    returns.iloc[0] = equity.iloc[0] - 1
+    weights = pd.DataFrame(weight_hist, index=dates, columns=assets)
+    cols = ["asset", "entry", "exit", "return", "days", "closed", "reason", "risk", "loss_of_account"]
+    trade_df = pd.DataFrame(trades, columns=cols).sort_values("entry", ignore_index=True)
+    if first:
+        # The account started at 1.0 in cash; the set-up day's buying costs stay in the first return.
+        equity, weights = equity.iloc[first:], weights.iloc[first:]
+        returns = returns.iloc[first:]
+        returns.iloc[0] = equity.iloc[0] - 1
+    return PortfolioResult(equity, returns, weights.sum(axis=1), trade_df, cost_multiplier,
+                           pd.Series(cash_r[first:], index=equity.index), log, weights)
+
+
+def portfolio_lookahead_check(strategy, prices: dict, cash_rate, assets: list, n_cuts: int = 4):
+    """
+    Two truncation tests: (1) each asset's signals, and (2) the whole portfolio. If the portfolio
+    only uses the past, its account value up to a cut-off date must be identical whether or not
+    the later data exists.
+    """
+    for a in assets:
+        ok, msg = lookahead_check(strategy, prices[a])
+        if not ok:
+            return False, f"{a}: {msg}"
+    full = simulate_portfolio(strategy, prices, cash_rate, assets=assets).equity
+    for cut in pd.to_datetime(np.linspace(full.index[len(full) // 3].value, full.index[-2].value, n_cuts)):
+        cut_prices = {a: prices[a].loc[:cut] for a in assets}
+        part = simulate_portfolio(strategy, cut_prices, cash_rate, assets=assets).equity
+        common = part.index.intersection(full.index)
+        if not np.allclose(part.loc[common], full.loc[common], rtol=1e-10, atol=0):
+            bad = common[~np.isclose(part.loc[common], full.loc[common], rtol=1e-10, atol=0)][0]
+            return False, f"Portfolio value on {bad.date()} changed when later data was hidden: it peeks at the future."
+    return True, (f"Each asset's signals, and the whole portfolio's daily value, stayed identical when the future "
+                  f"was hidden (6 cut-off dates per asset, {n_cuts} for the portfolio).")
+
+
+def evaluate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = None, is_demo: bool = False,
+                       assets: list | None = None):
+    """Run the full Skeptic Checklist on the portfolio version of a strategy."""
+    assets = assets or config.PORTFOLIO_ASSETS
+    closes = pd.DataFrame({a: prices[a]["Close"] for a in assets}).ffill()
+    equal = {a: 1 / len(assets) for a in assets}
+    # First day every asset's signal is ready.
+    ready = max(strategy.generate_signals(prices[a]).first_valid_index() for a in assets)
+    first_day = closes.index[closes.index.get_loc(ready) + 1]
+
+    def run(s, e, m=1.0, variant=None):
+        return simulate_portfolio(variant or strategy, prices, cash_rate, s, e, m, assets)
+
+    subject = Subject(
+        ticker="Portfolio", label=f"{strategy.label()} on {', '.join(assets)}", benchmark_name=BENCHMARK_NAME,
+        first_day=first_day, last_day=closes.index[-1],
+        run_strategy=run,
+        run_benchmark=lambda s, e, m=1.0: fixed_mix(closes, equal, s, e, m, cash_rate),
+        run_index=lambda s, e, m=1.0: buy_and_hold(prices[config.BROAD_INDEX], s, e, m, cash_rate),
+        run_mix=lambda w, s, e, m=1.0: fixed_mix(closes, {a: w / len(assets) for a in assets}, s, e, m, cash_rate),
+        lookahead=lambda: portfolio_lookahead_check(strategy, prices, cash_rate, assets),
+        sensitivity=lambda s, e: sensitivity_grid(strategy, lambda v: run(s, e, 1.0, v)),
+    )
+    return evaluate_subject(subject, is_demo)

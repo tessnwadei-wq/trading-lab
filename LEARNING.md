@@ -41,10 +41,27 @@ your ending money. "8% CAGR" ≈ the account grew as if it earned 8% every year.
 
 **Volatility**: How bumpy the ride is (how much daily returns swing), expressed per year. Higher = scarier.
 
-**Sharpe ratio**: Return divided by volatility: "how much reward per unit of bumpiness". Lets you compare a calm
-strategy with a wild one fairly. Rough guide: <0.5 weak, ~1 good, >2 in a backtest = be suspicious.
-The lab uses Sharpe as its main "does it beat buy-and-hold?" measure, because a strategy that sits in cash half
-the time *should* earn less, but it should be less bumpy too.
+**Sharpe ratio**: *Excess* return divided by volatility: "how much reward, above what cash pays, per unit of
+bumpiness". Lets you compare a calm strategy with a wild one fairly. Rough guide: <0.5 weak, ~1 good, >2 in a
+backtest = be suspicious. The lab uses Sharpe as its main "does it beat buy-and-hold?" measure, because a strategy
+that sits in cash half the time *should* earn less, but it should be less bumpy too.
+*Changed in session 2:* Sharpe used to be return ÷ volatility, as if cash paid 0%. It is now calculated on
+**excess return** (see below), which is the standard way. That lowers everyone's Sharpe a bit (by about the cash
+rate ÷ volatility), and lowers calm things more than bumpy ones, so the numbers in older reports aren't directly
+comparable with new ones.
+
+**Risk-free rate (cash rate)**: What you can earn with (almost) no risk, by lending to the US government for a few
+months through **Treasury bills (T-bills)**. The lab uses the 13-week T-bill yield (Yahoo ticker `^IRX`, file
+`data/csv/IRX.csv`). It has ranged from ~0% (2009-2015, 2020-21) to ~5% (2007, 2023-24). Money a strategy keeps in
+cash now earns this rate every day, which is what would happen in a real brokerage or savings account.
+Simplification: the US rate is used for Canadian XIU.TO too.
+
+**Excess return**: Return *minus* what cash would have paid over the same time. If a strategy made 7% in a year when
+T-bills paid 5%, its excess return was only 2%: that 2% is all it earned for taking risk. A strategy only deserves
+credit for its excess return.
+
+**Average share invested**: On an average day, what share of the account was in the market (the rest in cash).
+For an all-in-or-all-out rule, this is the same as "time in market".
 
 **Drawdown**: How far the account is below its previous high. **Max drawdown** is the worst peak-to-trough fall.
 A -50% drawdown needs a +100% gain to recover, which is why drawdowns matter so much.
@@ -85,8 +102,38 @@ smooth "hill"; a fluke is a lone spike (a "magic number").
 **Sample size**: How many trades the result is based on. With fewer than ~30 trades, luck can easily explain the
 result. Like judging a coin after 5 flips.
 
+**Same-risk mix (same-risk benchmark)**: A fairer yardstick for a strategy that is often in cash. It is simply
+"X% in the asset, the rest in cash earning interest", rebalanced monthly, where X is picked so the mix is exactly
+as bumpy (volatile) as the strategy. Example: the 200-day rule on SPY was about 57% as bumpy as SPY in 2005-2017,
+so its same-risk mix is 57% SPY + 43% cash. If the strategy can't earn more than that, all it did was own less of
+the asset, and you could do that with no rules at all. X is set on **training data only** (2005-2017) and then
+frozen, so the benchmark never peeks at the test period. At equal risk the fair comparison is plain return
+(CAGR), not Sharpe. Mixing an asset with cash leaves its Sharpe almost unchanged, so a Sharpe comparison would just
+repeat the buy-and-hold one.
+
+**Rebalancing**: Trading back to your target percentages after prices have moved them (e.g. once a month). It
+costs a little each time.
+
 **Regime**: A period with a distinct market "mood": a crash (2008, 2020), a slow bear market (2022), a calm bull
 market. Good strategies shouldn't fall apart in one regime.
+
+**PASS / WARN / FAIL**: Each Skeptic check gets one. **FAIL** means the strategy fails, full stop. **WARN**
+means "you should know this": it's shown in the report and the verdict sentence, but doesn't fail the
+strategy on its own. **NEEDS MORE DATA** means we can't tell yet (e.g. under 30 trades).
+
+**Consistency (check 8)**: Does the strategy behave about the same in training (2005-2017) and testing (2018+)?
+A Sharpe ratio measured over ~10 years has a margin of error of roughly ±0.3, so the lab WARNs if the two differ by
+more than 0.4 *in either direction*. A big jump up is not good news. It usually means the test period happened to
+suit the rule (XIU.TO: 0.16 → 0.68), not that the rule suddenly got better. Either way the period, not a steady
+edge, drove the result.
+
+**Over-search (multiple testing) counter and luck bar**: `journal/trials.csv` counts every parameter combination the
+lab has ever tested on real data. The more you try, the higher the Sharpe the *luckiest useless* rule will show by
+chance: over ~12 years of data, the best of 1 useless rule scores about 0, the best of 100 about 0.7, the best of
+2,000 about 1.0. That expected-best-by-luck number is the **luck bar**; a result needs to clear it. The report's
+"rough chance it's real" compares the result with the bar. This is a simplified version of the **deflated Sharpe
+ratio** (Bailey & López de Prado, 2014). Example: overfit_demo's best-of-1,920 training Sharpe of 0.87 sits *below*
+its luck bar of 0.98, so pure luck explains it.
 
 **Synthetic (demo) data**: Made-up prices generated by a computer to *resemble* real markets. Useful for testing
 that code works; useless for judging a strategy. A strategy tested only on synthetic data can never be approved.
@@ -119,10 +166,38 @@ Combining assets with low correlation smooths a portfolio.
 
 **Leverage**: Trading with borrowed money so gains *and losses* are multiplied. Common in forex; not allowed in this lab.
 
-## Risk (enforced from phase 2)
+## Risk (enforced in code from phase 2: `lab/portfolio.py`)
+
+**Portfolio backtest**: Running one strategy on several assets at once as a single account (here SPY, XIU.TO and
+GLD), so the risk rules can limit how the money is shared out.
 
 **Position size**: How much money goes into one trade.
 
-**Risk per trade**: How much you'd lose if the trade hits its exit. The lab's rule: max 1% of the account.
-**Max open positions / max position size**: No more than 5 trades at once and no more than 20% of the account in one.
-**Drawdown circuit breaker**: If the account falls 10% from its peak, stop opening trades and review.
+**Stop (protective stop, exit point)**: A price decided in advance at which you sell to cap a loss. Without one,
+"how much am I risking?" has no answer.
+
+**Risk per trade**: How much you'd lose if the trade hits its stop, as a share of the account. It is NOT the
+position size: a 20% position with a stop 3% below entry risks 20% × 3% = 0.6% of the account. The lab's rule: max 1%.
+
+**Volatility-based position sizing**: Choosing the size so every trade risks the same 1%, whatever the asset.
+The stop is placed a distance below entry that depends on how much the asset normally moves: here 3 × its
+**average daily move** over the last 20 days (a closing-price version of the **ATR, Average True Range**).
+Then *size = 1% ÷ stop distance*. A calm asset (small moves, close stop) gets a bigger position; a jumpy one (big
+moves, far stop) a smaller one. Why not a fixed 5% stop? It would be knocked out by normal wiggles in a jumpy
+market and be needlessly loose in a calm one. In practice, for SPY/XIU.TO/GLD the stop is usually only 2-4% away,
+so the 1% rule would allow 25-50% positions and the 20% cap below does the limiting instead.
+
+**Gap**: When a price jumps between one close and the next, skipping over the stop. The loss can then be bigger than
+planned. The lab only checks stops at the close, so the report shows the worst real loss per trade.
+
+**Max position size / max open positions**: No more than 20% of the account in one position and no more than 5
+positions at once. A position that grows past 20% is **trimmed** (partly sold) back to 18%. The small buffer
+avoids selling a sliver every day.
+
+**Drawdown circuit breaker**: An automatic "stop and think" switch. If the account falls 10% from its peak, the
+lab opens no new trades, logs it, and flags it for review in the report. In a backtest nobody can do the review,
+so the lab simulates it as a ~1-month (21 trading-day) pause, after which trading resumes and the current value
+counts as the new peak. Existing positions keep their normal exits.
+
+**Currency-hedged**: Ignoring exchange-rate moves when adding up assets priced in different currencies. The
+portfolio treats XIU.TO (Canadian dollars) this way, which is a simplification.

@@ -1,0 +1,6 @@
+first_logged,idea,asset,configurations,how_chosen,data
+2026-09-26,ma_trend,SPY,1,fixed textbook values,real
+2026-09-26,ma_trend,XIU.TO,1,fixed textbook values,real
+2026-09-26,overfit_demo,SPY,1920,brute-force search on 2005-2017,real
+2026-09-26,overfit_demo,XIU.TO,1920,brute-force search on 2005-2017,real
+2026-09-26,portfolio_ma_trend,Portfolio,1,fixed textbook values; risk settings not tuned,real

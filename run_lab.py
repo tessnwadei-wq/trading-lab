@@ -2,20 +2,24 @@
 Run the whole lab: load data, backtest each strategy, run the skeptic, write reports.
 
 Usage:
-    python run_lab.py                         # all strategies, real data
-    python run_lab.py --strategy ma_trend     # one strategy
-    python run_lab.py --refresh               # re-download prices instead of using the cache
-    python run_lab.py --demo                  # made-up practice data (when downloads fail)
+    python run_lab.py                              # all strategies + portfolios, data from data/csv/
+    python run_lab.py --strategy ma_trend          # one strategy
+    python run_lab.py --strategy portfolio_ma_trend  # just the multi-asset portfolio version
+    python run_lab.py --refresh                    # re-download every ticker, overwrite data/csv/, then run
+    python run_lab.py --demo                       # made-up practice data (when downloads fail)
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 
-from lab import config
-from lab.data import DataUnavailable, load_all
-from lab.report import write_report
+from lab import config, trials
+from lab.cash import daily_cash_returns
+from lab.data import DataUnavailable, load_all, load_prices
+from lab.portfolio import evaluate_portfolio
+from lab.report import write_portfolio_report, write_report
 from lab.skeptic import evaluate, overall_verdict
 from strategies.ma_trend import MATrend
 from strategies.overfit_demo import OverfitDemo
@@ -25,17 +29,19 @@ STRATEGIES = {
     "ma_trend": MATrend,
     "overfit_demo": OverfitDemo,
 }
+PORTFOLIOS = {f"portfolio_{name}": name for name in config.PORTFOLIO_STRATEGIES}
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Trading Lab: backtest + skeptic")
-    ap.add_argument("--strategy", choices=list(STRATEGIES), help="run only this strategy")
+    ap.add_argument("--strategy", choices=list(STRATEGIES) + list(PORTFOLIOS), help="run only this one")
     ap.add_argument("--demo", action="store_true", help="use synthetic practice data")
-    ap.add_argument("--refresh", action="store_true", help="re-download prices")
+    ap.add_argument("--refresh", action="store_true",
+                    help="re-download every ticker and overwrite the files in data/csv/")
     args = ap.parse_args(argv)
 
     tickers = config.TRADED_ASSETS + config.COMPARISON_ASSETS
-    print("Loading prices...")
+    print("Re-downloading prices into data/csv/..." if args.refresh else "Loading prices...")
     try:
         prices, sources = load_all(tickers, demo=args.demo, refresh=args.refresh)
     except DataUnavailable as exc:
@@ -45,25 +51,66 @@ def main(argv=None) -> int:
         p = prices[t]
         print(f"  {t:7s} {len(p):5d} days  {p.index[0].date()} to {p.index[-1].date()}  ({sources[t]})")
 
-    names = [args.strategy] if args.strategy else list(STRATEGIES)
+    # Cash interest. Missing IRX data is not fatal: cash then earns 0%, with a loud warning.
+    try:
+        irx, irx_source = load_prices(config.CASH_TICKER, demo=args.demo, refresh=args.refresh)
+        print(f"  {'^IRX':7s} {len(irx):5d} days  {irx.index[0].date()} to {irx.index[-1].date()}  ({irx_source})")
+    except DataUnavailable:
+        irx, irx_source = None, "MISSING (cash earns 0%)"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cash = daily_cash_returns(irx)
+    for w in caught:
+        print(f"\nWARNING: {w.message}\n")
+    all_sources = {**sources, config.CASH_TICKER: irx_source}
+
+    names = [args.strategy] if args.strategy else list(STRATEGIES) + list(PORTFOLIOS)
     for name in names:
         print(f"\n=== {name} ===")
+        if name in PORTFOLIOS:
+            run_portfolio(name, PORTFOLIOS[name], prices, cash, all_sources, args.demo)
+            continue
         evaluations, notes = [], []
         for ticker in config.TRADED_ASSETS:
             strategy = STRATEGIES[name]()
             # fit() may choose parameters, and is only EVER given training data.
-            fitted = strategy.fit(prices[ticker].loc[:config.TRAIN_END])
-            if getattr(fitted, "search_results", None) is not None:
+            fitted = strategy.fit(prices[ticker].loc[:config.TRAIN_END], cash_rate=cash)
+            search = getattr(fitted, "search_results", None)
+            if search is not None:
                 notes.append(search_note(ticker, fitted))
-            ev = evaluate(fitted, prices[ticker], prices[config.BROAD_INDEX], ticker, is_demo=args.demo)
+            if not args.demo:
+                trials.log_trial(name, ticker, len(search) if search is not None else 1,
+                                 "brute-force search on 2005-2017" if search is not None else "fixed textbook values")
+            ev = evaluate(fitted, prices[ticker], prices[config.BROAD_INDEX], ticker, is_demo=args.demo, cash_rate=cash)
             evaluations.append(ev)
-            print(f"  {ticker:7s} {fitted.label():60s} -> {ev.verdict}")
-            for c in ev.checks:
-                print(f"      {c.number}. {c.name:22s} {c.status}")
+            print_evaluation(ticker, fitted.label(), ev)
         overall = overall_verdict(evaluations)
-        path = write_report(fitted, evaluations, overall, sources, prices, extra_md="\n\n".join(notes))
+        path = write_report(fitted, evaluations, overall, all_sources, prices, extra_md="\n\n".join(notes),
+                            cash_ok=cash is not None)
         print(f"  Overall: {overall}. Report: {path.relative_to(path.parents[2])}")
     return 0
+
+
+def run_portfolio(name, strategy_name, prices, cash, sources, demo):
+    strategy = STRATEGIES[strategy_name]()
+    if not demo:
+        trials.log_trial(name, "Portfolio", 1, "fixed textbook values; risk settings not tuned")
+    ev = evaluate_portfolio(strategy, prices, cash, is_demo=demo)
+    print_evaluation("Portfolio", strategy.label(), ev)
+    risk = ev.results[("full", "strategy")].risk
+    print(f"      Risk rules: {risk.entries} entries, {risk.sized_by_risk_rule} sized by the 1% rule, "
+          f"{risk.sized_by_cap} capped at 20%, {risk.trims} trims, {risk.stop_exits} stop exits, "
+          f"circuit breaker triggered {len(risk.breaker_events)} times")
+    for b in risk.breaker_events:
+        print(f"      FLAG FOR REVIEW: circuit breaker tripped {b['tripped'].date()} ({b['drawdown']:.1%} from peak)")
+    path = write_portfolio_report(strategy, ev, sources, cash_ok=cash is not None)
+    print(f"  Overall: {ev.verdict}. Report: {path.relative_to(path.parents[2])}")
+
+
+def print_evaluation(ticker, label, ev):
+    print(f"  {ticker:9s} {label:60s} -> {ev.verdict}")
+    for c in ev.checks:
+        print(f"      {c.number}. {c.name:30s} {c.status}")
 
 
 def search_note(ticker, fitted) -> str:

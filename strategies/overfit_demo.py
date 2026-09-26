@@ -31,7 +31,7 @@ import pandas as pd
 
 from lab import config
 from lab.backtest import run_backtest
-from lab.metrics import sharpe
+from lab.metrics import result_sharpe
 from strategies.base import Strategy
 
 SEARCH_SPACE = {
@@ -78,7 +78,7 @@ class OverfitDemo(Strategy):
         signal[slow.isna() | fast.isna()] = np.nan
         return signal
 
-    def fit(self, train_prices: pd.DataFrame) -> "OverfitDemo":
+    def fit(self, train_prices: pd.DataFrame, cash_rate: pd.Series | None = None) -> "OverfitDemo":
         """
         Brute-force search on TRAINING data only (the caller must pass data up to 2017).
         Returns a new strategy with the best parameters, and remembers every result.
@@ -94,9 +94,9 @@ class OverfitDemo(Strategy):
             signal = candidate.generate_signals(train_prices)
             # Score from the first day the rule could act (after its warm-up), like the skeptic does.
             first = train_prices.index.get_loc(signal.first_valid_index()) + 1
-            res = run_backtest(train_prices, signal, start=train_prices.index[first])
+            res = run_backtest(train_prices, signal, start=train_prices.index[first], cash_rate=cash_rate)
             rows.append({"fast": fast, "slow": slow, "band": band, "min_hold": min_hold,
-                         "sharpe": sharpe(res.returns)})
+                         "sharpe": result_sharpe(res)})
         table = pd.DataFrame(rows).sort_values("sharpe", ascending=False, ignore_index=True)
         best = table.iloc[0]
         fitted = self.with_params(fast=int(best.fast), slow=int(best.slow),
