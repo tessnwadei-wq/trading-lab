@@ -77,10 +77,16 @@ TRADING_DAYS_PER_YEAR = 252
 PORTFOLIO_ASSETS = ["SPY", "XIU.TO", "GLD"]
 PORTFOLIO_STRATEGIES = ["ma_trend"]       # strategies also run as a multi-asset portfolio
 
-MAX_RISK_PER_TRADE = 0.01        # lose at most 1% of the account if a trade hits its exit
-MAX_POSITION_WEIGHT = 0.20       # at most 20% of the account in any one position
-TRIM_BACK_TO = 0.18              # a position that grows past 20% is cut back to 18%, not 20%, so a
-                                 # rising position isn't trimmed by a sliver (and charged costs) every day
+MAX_RISK_PER_TRADE = 0.01        # a stopped-out trade should normally lose no more than 1% of the account,
+                                 # INCLUDING the extra day a stop-sale waits for (see STOP_FILL_BUFFER_MOVES)
+# 20% rule, as enforced: no buy may take a position above 20%; anything found above 20% at a close is
+# trimmed to 18% at the next close (18%, not 20%, so a rising position isn't trimmed by a sliver, and
+# charged costs, every day).
+MAX_POSITION_WEIGHT = 0.20
+TRIM_BACK_TO = 0.18
+# Alert (logged and shown in the report) whenever a position ENDS a day above 22%: the one-day wait for a trim
+# should only ever let a position drift a little above 20%, so 22% means something unusual happened.
+POSITION_ALERT_WEIGHT = 0.22
 MAX_OPEN_POSITIONS = 5
 CIRCUIT_BREAKER_DRAWDOWN = 0.10  # after a 10% fall from the peak, open no new trades until a review
 
@@ -104,3 +110,16 @@ CIRCUIT_BREAKER_HARD_STOP = 0.20
 # price. 3 x a 20-day average move is a common textbook setting (an ATR stop); it was NOT tuned.
 STOP_ATR_DAYS = 20
 STOP_ATR_MULTIPLE = 3.0
+
+# ONE-DAY BUFFER for the 1% rule (session 4, Tessy's decision). A stop is only seen at a close and the sale
+# fills at the NEXT close, so the price can gap past the stop and keep falling for a day. Positions are sized
+# as if the stop were STOP_FILL_BUFFER_MOVES "average daily moves" further away than it really is, so a normal
+# stop-out still loses no more than 1% of the account. (The stop itself stays at 3 moves below entry.)
+# Why 2: chosen from training data (2005-2017) and common sense, never the test period.
+#   * Common sense: on SPY, XIU.TO and GLD a one-day fall bigger than 2 average daily moves happens on only
+#     about 7% of days (bigger than 1 move: about 18%).
+#   * Training data: of the portfolio's 21 stop-outs in 2005-2017, 81% filled within 2 average daily moves
+#     past the stop (67% within 1, 95% within 3). 3 would treat nearly every stop-out as a worst case and
+#     make positions much smaller for little gain; 1 leaves one stop-out in three over budget.
+# It is a buffer for NORMAL days, not a guarantee: a crash day can still gap through it.
+STOP_FILL_BUFFER_MOVES = 2.0

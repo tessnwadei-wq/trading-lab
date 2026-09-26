@@ -113,6 +113,13 @@ def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
     print(f"      Risk rules: {risk.entries} entries, {risk.sized_by_risk_rule} sized by the 1% rule, "
           f"{risk.sized_by_cap} capped at 20%, {risk.trims} trims, {risk.stop_exits} stop exits, "
           f"circuit breaker triggered {len(risk.breaker_events)} times")
+    if risk.alerts:
+        print(f"      POSITION ALERT: a position ended the day above {config.POSITION_ALERT_WEIGHT:.0%} "
+              f"{len(risk.alerts)} time(s):")
+        for al in risk.alerts:
+            print(f"        {al['date'].date()} {al['asset']} {al['weight']:.1%}")
+    print(f"      Stop-outs: {risk.stop_exits}, worst lost {-risk.worst_stop_loss:.2%} of the account, "
+          f"{risk.stops_over_budget} over the {config.MAX_RISK_PER_TRADE:.0%} budget")
     for b in risk.breaker_events:
         print(f"      FLAG FOR REVIEW: circuit breaker tripped {b['tripped'].date()} ({b['drawdown']:.1%} from peak)")
     if not demo:

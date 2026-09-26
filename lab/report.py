@@ -351,17 +351,22 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
              "The portfolio enforces the CLAUDE.md risk rules in code (`lab/portfolio.py`). Numbers are for the "
              "full period at normal costs.", "",
              "| Rule | Setting | How often it limited a trade | Worst case seen |", "|---|---|---|---|",
-             f"| Max risk per trade | {config.MAX_RISK_PER_TRADE:.0%} of the account (costs included), with a stop "
-             f"{config.STOP_ATR_MULTIPLE:g} × the {config.STOP_ATR_DAYS}-day average daily move below entry | "
+             f"| Max risk per trade | A stopped-out trade should normally lose no more than "
+             f"{config.MAX_RISK_PER_TRADE:.0%} of the account (costs included), even though the stop-sale fills a day "
+             f"later. Stop: {config.STOP_ATR_MULTIPLE:g} × the {config.STOP_ATR_DAYS}-day average daily move below "
+             f"entry; sized as if {config.STOP_FILL_BUFFER_MOVES:g} more moves away (the one-day buffer) | "
              f"Set the size of **{log.sized_by_risk_rule} of {log.entries}** entries ({log.sized_by_risk_rule / e:.0%}); "
-             f"the stop closed {log.stop_exits} trades | Worst closed trade lost "
-             f"{-log.worst_trade_loss:.2%} of the account"
-             + (f" (stop-outs averaged {-stops['loss_of_account'].mean():.2%})" if len(stops) else "") + " |",
-             f"| Max position size | {config.MAX_POSITION_WEIGHT:.0%} of the account "
-             f"(trimmed back to {config.TRIM_BACK_TO:.0%}) | Capped the size of **{log.sized_by_cap} of {log.entries}** "
-             f"entries ({log.sized_by_cap / e:.0%}); trimmed a grown position {log.trims} times | Largest position "
-             f"at any close: {log.max_position_weight:.1%} (a position found above 20% is trimmed at the next close; "
-             f"{log.days_over_cap} position-days closed above 20%) |",
+             f"the stop closed {log.stop_exits} trades, **{log.stops_over_budget}** of them lost more than "
+             f"{config.MAX_RISK_PER_TRADE:.0%} | Worst stop-out lost {-log.worst_stop_loss:.2%} of the account"
+             + (f" (stop-outs averaged {-stops['loss_of_account'].mean():.2%})" if len(stops) else "")
+             + f"; worst closed trade of any kind {-log.worst_trade_loss:.2%} |",
+             f"| Max position size | No buy that would take a position above {config.MAX_POSITION_WEIGHT:.0%}. "
+             f"Anything above {config.MAX_POSITION_WEIGHT:.0%} at a close is trimmed to {config.TRIM_BACK_TO:.0%} at the "
+             f"next close. Alert above {config.POSITION_ALERT_WEIGHT:.0%} | Capped the size of **{log.sized_by_cap} of "
+             f"{log.entries}** entries ({log.sized_by_cap / e:.0%}); trimmed a grown position {log.trims} times | "
+             f"Largest position at any close: {log.max_position_weight:.1%} ({log.days_over_cap} position-days closed "
+             f"above {config.MAX_POSITION_WEIGHT:.0%}, each trimmed at the next close); "
+             f"**{len(log.alerts)}** alert{'s' if len(log.alerts) != 1 else ''} above {config.POSITION_ALERT_WEIGHT:.0%} |",
              f"| Max open positions | {config.MAX_OPEN_POSITIONS} | Blocked {log.blocked_by_max_positions} entries | "
              f"Most open at once: {log.max_open_positions} (only {len(res.weights.columns)} assets, so this rule "
              f"{'can never bind yet' if len(res.weights.columns) <= config.MAX_OPEN_POSITIONS else 'can bind'}) |",
@@ -374,6 +379,17 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
     if log.hard_stop:
         lines += [f"**🛑 FLAG FOR REVIEW: the hard floor was hit on {log.hard_stop['tripped'].date()} "
                   f"({log.hard_stop['drawdown']:.1%} from the all-time high). No new trades were opened after that.**", ""]
+    if log.alerts:
+        lines += [f"**⚠️ POSITION ALERT: a position ended the day above {config.POSITION_ALERT_WEIGHT:.0%} "
+                  f"{len(log.alerts)} time{'s' if len(log.alerts) != 1 else ''}.** Each was trimmed to "
+                  f"{config.TRIM_BACK_TO:.0%} at the next close.", "",
+                  "| Day | Asset | Share of the account at the close |", "|---|---|---:|"]
+        lines += [f"| {a['date'].date()} | {a['asset']} | {a['weight']:.1%} |" for a in log.alerts[:20]]
+        if len(log.alerts) > 20:
+            lines.append(f"| ... | {len(log.alerts) - 20} more | |")
+        lines.append("")
+    else:
+        lines += [f"**Position alerts (above {config.POSITION_ALERT_WEIGHT:.0%} at a close): none.**", ""]
     if log.breaker_events:
         lines += ["**⚠️ FLAG FOR REVIEW: the circuit breaker triggered.**", "",
                   "| Triggered | Fall from peak | Trading resumed | How |", "|---|---:|---|---|"]
@@ -386,17 +402,22 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
         lines += [f"**Circuit breaker: never triggered.** The account never fell {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} "
                   "from its peak.", ""]
     lines += ["**In plain English:** the 1% rule works by choosing the position size so that hitting the stop "
-              "(plus the costs of buying and selling) loses about 1% of the account. For these assets the stop "
-              "distance was usually under 5%, so the 1% rule would have allowed a position bigger than 20%; the 20% "
-              "cap was then the rule that actually set the size. Every order fills at the close *after* the "
-              "decision, so a loss can exceed 1% if a price gaps through the stop, or keeps falling for the day "
-              "before the sale fills.", "",
+              "(plus the costs of buying and selling) loses about 1% of the account. Every order fills at the close "
+              "*after* the decision, so a stopped-out price can keep falling for a day before the sale fills. The "
+              f"**one-day buffer** allows for that: positions are sized as if the stop were "
+              f"{config.STOP_FILL_BUFFER_MOVES:g} more average daily moves away (chosen from 2005-2017 data and "
+              "common sense; see `STOP_FILL_BUFFER_MOVES` in `lab/config.py`). A big gap through the stop can still "
+              "cost more than 1%, which is why the table counts stop-outs over budget. For these assets the room "
+              "needed was usually under 5-7%, so the 1% rule would still have allowed a position bigger than 20%; "
+              "the 20% cap was then the rule that actually set the size.", "",
               f"**Circuit breaker assumption (backtest only):** a person can't press \"reset\" inside a simulation, "
               f"so after a {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} fall the backtest assumes a review of "
               f"**{config.CIRCUIT_BREAKER_REVIEW_DAYS} trading days** (about a month; `CIRCUIT_BREAKER_REVIEW_DAYS` in "
               "`lab/config.py`, chosen by common sense, not by looking at results), then resumes. In paper trading "
-              "nothing restarts by itself: new trades stay blocked until Tessy runs `python reset_circuit_breaker.py "
-              "--who <name> --reason \"...\"`, which is logged in `journal/circuit_breaker_resets.csv`.", "",
+              "nothing restarts by itself: new trades stay blocked until **Tessy, in person,** runs `python "
+              "reset_circuit_breaker.py --who <name> --reason \"...\"` and types `RESET` to confirm (plus an extra "
+              "confirmation for the 20% hard floor). Agents never run, script or suggest automating it. Every reset "
+              "is appended to `journal/circuit_breaker_resets.csv`, a log that can only be added to.", "",
               f"**Not yet tested on real data:** the {config.MAX_OPEN_POSITIONS}-position limit (only "
               f"{len(res.weights.columns)} assets so far){' and the circuit breaker (never triggered)' if not log.breaker_events else ''}. "
               "All the risk rules are also checked with made-up prices in `tests/test_portfolio.py` and "

@@ -39,16 +39,17 @@ def run(prices, strategy=None, **kw):
 
 
 def test_one_percent_risk_rule_sizes_jumpy_assets_smaller():
-    # A jumpy asset: ~2.5% average daily move -> stop 3 x 2.5% = 7.5% away -> size 1% / 7.5% = 13.3%.
+    # A jumpy asset: ~2.5% average daily move -> stop 3 x 2.5% = 7.5% away, plus the one-day buffer of
+    # 2 x 2.5% = 5% -> size about 1% / 12.8% = 7.9% of the account.
     prices = book(JUMPY=wiggle(60, 0.025))
     res = run(prices)
     move = prices["JUMPY"]["Close"].pct_change().abs().rolling(config.STOP_ATR_DAYS).mean()
     first_trade = res.trades.iloc[0]
-    distance = config.STOP_ATR_MULTIPLE * move.loc[first_trade.entry]
+    fall = (config.STOP_ATR_MULTIPLE + config.STOP_FILL_BUFFER_MOVES) * move.loc[first_trade.entry]
     assert res.risk.sized_by_risk_rule == 1 and res.risk.sized_by_cap == 0
-    # The 1% includes the cost of buying and of selling at the stop.
+    # The 1% includes the one-day buffer and the cost of buying and of selling at the stop.
     c = config.COST_PER_TRADE
-    loss_per_dollar = distance + c + (1 - distance) * c
+    loss_per_dollar = fall + c + (1 - fall) * c
     assert first_trade.risk == pytest.approx(config.MAX_RISK_PER_TRADE, rel=1e-3)
     assert res.weights.loc[first_trade.entry].iloc[0] == pytest.approx(config.MAX_RISK_PER_TRADE / loss_per_dollar,
                                                                        rel=1e-3)
@@ -234,3 +235,54 @@ class InAndOut(AlwaysIn):
         s = super().generate_signals(prices)
         s.iloc[config.STOP_ATR_DAYS::10] = 0.0
         return s
+
+
+# ---- Session 4: the one-day buffer on the 1% rule, and the 22% alert ----------------------------------
+
+def test_buffer_is_set_in_config_and_only_shrinks_positions():
+    assert config.STOP_FILL_BUFFER_MOVES == 2.0
+    prices = book(JUMPY=wiggle(60, 0.025))
+    with_buffer = run(prices).weights.max().iloc[0]
+    import lab.config as cfg
+    old = cfg.STOP_FILL_BUFFER_MOVES
+    try:
+        cfg.STOP_FILL_BUFFER_MOVES = 0.0
+        without = run(prices).weights.max().iloc[0]
+    finally:
+        cfg.STOP_FILL_BUFFER_MOVES = old
+    # 3 moves vs 3 + 2 moves of room: the buffered position is about 3/5 of the unbuffered one.
+    assert with_buffer < without
+    assert with_buffer / without == pytest.approx(0.6, abs=0.03)
+
+
+def test_one_day_delay_on_a_stop_sale_stays_within_one_percent():
+    # Jumpy asset (1% rule sets the size), then a slide of one average daily move a day: the stop is hit, the
+    # sale fills a day later. Without the buffer that extra day pushed the loss over 1%; with it, it stays under.
+    calm = wiggle(40, 0.03)
+    drop = calm[-1] * np.cumprod(np.full(10, 0.97))
+    res = run(book(A=np.concatenate([calm, drop])))
+    stops = res.trades[res.trades.reason == "stop"]
+    assert len(stops) == 1
+    assert -config.MAX_RISK_PER_TRADE <= stops.loss_of_account.iloc[0] < -0.004
+    assert res.risk.stops_over_budget == 0
+    assert res.risk.worst_stop_loss == pytest.approx(stops.loss_of_account.iloc[0])
+
+
+def test_alert_when_a_position_ends_a_day_above_22_percent():
+    # A calm asset bought at 20%, then it jumps 30% in one day: it ends that day well above 22% (alert),
+    # and is trimmed to 18% at the next close.
+    p = wiggle(60, 0.002)
+    p[40:] *= 1.30
+    res = run(book(A=p))
+    alerts = res.risk.alerts
+    assert len(alerts) == 1
+    day = res.equity.index[40]
+    assert alerts[0]["date"] == day and alerts[0]["asset"] == "A" and alerts[0]["weight"] > 0.22
+    assert res.weights["A"].iloc[41] == pytest.approx(config.TRIM_BACK_TO, abs=1e-3)
+    assert_over_cap_is_trimmed_next_close(res)
+
+
+def test_no_alert_for_the_normal_one_day_drift_above_20_percent():
+    rising = np.concatenate([wiggle(30, 0.002), wiggle(30, 0.002)[-1] * np.cumprod(np.full(30, 1.02))])
+    res = run(book(UP=rising))
+    assert res.risk.days_over_cap >= 1 and res.risk.alerts == []
