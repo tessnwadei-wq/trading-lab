@@ -309,6 +309,38 @@ def trials_section(evaluations: list[AssetEvaluation], idea: str, is_demo: bool)
     return "\n".join(lines)
 
 
+def looks_section(idea: str, is_demo: bool) -> str:
+    """How many times this idea's 2018+ test results have been seen (journal/test_period_looks.csv)."""
+    from lab import trials
+
+    if is_demo:
+        return ""
+    looks = trials.looks_for(idea)
+    lines = ["## Test-period looks", "",
+             f"The 2018+ test period should be looked at **once** per idea. This idea's test results have been seen "
+             f"**{len(looks)} time{'s' if len(looks) != 1 else ''}** (every look is logged in "
+             "[`journal/test_period_looks.csv`](../../journal/test_period_looks.csv); re-running with nothing "
+             "changed isn't a new look).", "",
+             "| # | Date | Why |", "|---:|---|---|"]
+    for i, r in enumerate(looks, 1):
+        lines.append(f"| {i} | {r['date']} | {r['reason']} |")
+    if len(looks) > 1:
+        lines += ["", "**Why this matters:** each extra look weakens the test a little. None of these looks was used to "
+                  "choose parameters, but a result seen several times is no longer a completely fresh test. A strategy "
+                  "that is changed *because* of what a look showed must be treated as a new idea."]
+    return "\n".join(lines + [""])
+
+
+def looks_line(idea: str, is_demo: bool) -> str:
+    from lab import trials
+
+    if is_demo:
+        return ""
+    n = len(trials.looks_for(idea))
+    return (f"**Test-period (2018+) looks for this idea: {n}** "
+            f"(this report included; details in *Test-period looks* below).")
+
+
 def risk_manager_section(ev: AssetEvaluation) -> str:
     res = ev.results[("full", "strategy")]
     log = res.risk
@@ -367,7 +399,8 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
               "--who <name> --reason \"...\"`, which is logged in `journal/circuit_breaker_resets.csv`.", "",
               f"**Not yet tested on real data:** the {config.MAX_OPEN_POSITIONS}-position limit (only "
               f"{len(res.weights.columns)} assets so far){' and the circuit breaker (never triggered)' if not log.breaker_events else ''}. "
-              "Both are checked with made-up prices in `tests/test_portfolio.py` and `tests/test_breaker.py`.",
+              "All the risk rules are also checked with made-up prices in `tests/test_portfolio.py` and "
+              "`tests/test_breaker.py`.",
               "", f"![Portfolio exposure](portfolio_exposure.png)", ""]
     return "\n".join(lines)
 
@@ -435,6 +468,7 @@ def _asset_section(ev: AssetEvaluation, out_dir: Path) -> list[str]:
 
 
 def _header(title: str, rule: str, evaluations, overall, sources, cash_ok: bool) -> list[str]:
+    """Top of every report. `title` is also the idea's name in the journal."""
     is_demo = any(e.is_demo for e in evaluations)
     md = [f"# Strategy report: `{title}`", ""]
     if is_demo:
@@ -446,6 +480,8 @@ def _header(title: str, rule: str, evaluations, overall, sources, cash_ok: bool)
            "| Tested on | Verdict | Why |", "|---|---|---|"]
     for ev in evaluations:
         md.append(f"| {ev.ticker} | **{ev.verdict}** | {ev.reason} |")
+    if not is_demo:
+        md += ["", looks_line(title, is_demo)]
     md += ["", ground_rules(CASH_NOTE_OK if cash_ok else CASH_NOTE_MISSING), "",
            "**Data sources:** " + "; ".join(f"{t}: {s}" for t, s in sources.items()), ""]
     return md
@@ -464,6 +500,7 @@ def write_report(strategy, evaluations: list[AssetEvaluation], overall: str, sou
         md += [f"## {ev.ticker}: {config.ASSET_NAMES.get(ev.ticker, '')}", ""] + _asset_section(ev, out_dir)
 
     md += [trials_section(evaluations, strategy.name, is_demo), "",
+           looks_section(strategy.name, is_demo), "",
            markets_section(all_prices), "",
            "---", "*How to read the numbers: see [LEARNING.md](../../LEARNING.md).*", ""]
     path = out_dir / "report.md"
@@ -486,6 +523,7 @@ def write_portfolio_report(strategy, ev: AssetEvaluation, sources: dict, cash_ok
     exposure_chart(ev, out_dir / "portfolio_exposure.png")
     md += [risk_manager_section(ev), "", "## Portfolio results", ""] + _asset_section(ev, out_dir)
     md += [trials_section([ev], name, ev.is_demo), "",
+           looks_section(name, ev.is_demo), "",
            "---", "*How to read the numbers: see [LEARNING.md](../../LEARNING.md).*", ""]
     path = out_dir / "report.md"
     path.write_text("\n".join(md), encoding="utf-8")

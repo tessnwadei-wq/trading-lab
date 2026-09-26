@@ -93,9 +93,10 @@ class CircuitBreaker:
               log_path: Path | None = None) -> dict:
         """
         Paper mode only: a person restarts trading after reviewing what went wrong.
-        Refused without a name and a reason. Clears both the 10% breaker and the hard floor, and
-        makes the current value the new peak (and new all-time high, for the hard floor), so the
-        loss that was reviewed isn't counted twice. Every reset is appended to the reset log.
+        Refused without a name and a reason. Clears the 10% breaker and makes the current value the
+        new peak. The all-time high is KEPT, so a series of reviewed 10% falls still hits the 20% hard
+        floor. Resetting the hard floor itself is a bigger decision: it also makes the current value
+        the new all-time high. Every reset is appended to the reset log.
         """
         if self.mode != PAPER:
             raise RuntimeError("Backtests can't be reset by hand: they use the review-period assumption "
@@ -111,7 +112,8 @@ class CircuitBreaker:
         row = {"reset_at": when.isoformat(timespec="seconds"), "who": who.strip(), "reason": reason.strip(),
                "tripped_on": str(trip["tripped"])[:10], "fall_from_peak": f"{trip['drawdown']:.4f}", "kind": kind}
         self._restart(when, equity, f"manual reset by {who.strip()}: {reason.strip()}")
-        self.halted, self.all_time_high = False, equity
+        if self.halted:
+            self.halted, self.all_time_high = False, equity
         log_reset(row, log_path or RESET_LOG)
         return row
 

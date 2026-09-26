@@ -7,6 +7,11 @@ Usage:
     python run_lab.py --strategy portfolio_ma_trend  # just the multi-asset portfolio version
     python run_lab.py --refresh                    # re-download every ticker, overwrite data/csv/, then run
     python run_lab.py --demo                       # made-up practice data (when downloads fail)
+    python run_lab.py --reason "why I'm running it"  # recorded with each look at the 2018+ test period
+
+Every real-data run writes 2018+ (test-period) results into the reports, so it counts as a LOOK at the
+test period and is logged in journal/test_period_looks.csv with today's date and your --reason.
+Re-running with nothing changed gives identical numbers and is not counted again.
 """
 
 from __future__ import annotations
@@ -38,7 +43,12 @@ def main(argv=None) -> int:
     ap.add_argument("--demo", action="store_true", help="use synthetic practice data")
     ap.add_argument("--refresh", action="store_true",
                     help="re-download every ticker and overwrite the files in data/csv/")
+    ap.add_argument("--reason", default="",
+                    help="why you're looking at the 2018+ test results (logged in journal/test_period_looks.csv)")
     args = ap.parse_args(argv)
+    if not args.demo and not args.reason:
+        print("NOTE: this run shows 2018+ test results, which counts as a look at the test period. Next time add "
+              '--reason "..." so the log says why.')
 
     tickers = config.TRADED_ASSETS + config.COMPARISON_ASSETS
     print("Re-downloading prices into data/csv/..." if args.refresh else "Loading prices...")
@@ -68,7 +78,7 @@ def main(argv=None) -> int:
     for name in names:
         print(f"\n=== {name} ===")
         if name in PORTFOLIOS:
-            run_portfolio(name, PORTFOLIOS[name], prices, cash, all_sources, args.demo)
+            run_portfolio(name, PORTFOLIOS[name], prices, cash, all_sources, args.demo, args.reason)
             continue
         evaluations, notes = [], []
         for ticker in config.TRADED_ASSETS:
@@ -85,13 +95,15 @@ def main(argv=None) -> int:
             evaluations.append(ev)
             print_evaluation(ticker, fitted.label(), ev)
         overall = overall_verdict(evaluations)
+        if not args.demo:
+            record_look(name, evaluations, args.reason)
         path = write_report(fitted, evaluations, overall, all_sources, prices, extra_md="\n\n".join(notes),
                             cash_ok=cash is not None)
         print(f"  Overall: {overall}. Report: {path.relative_to(path.parents[2])}")
     return 0
 
 
-def run_portfolio(name, strategy_name, prices, cash, sources, demo):
+def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
     strategy = STRATEGIES[strategy_name]()
     if not demo:
         trials.log_trial(name, "Portfolio", 1, "fixed textbook values; risk settings not tuned")
@@ -103,8 +115,22 @@ def run_portfolio(name, strategy_name, prices, cash, sources, demo):
           f"circuit breaker triggered {len(risk.breaker_events)} times")
     for b in risk.breaker_events:
         print(f"      FLAG FOR REVIEW: circuit breaker tripped {b['tripped'].date()} ({b['drawdown']:.1%} from peak)")
+    if not demo:
+        record_look(name, [ev], reason)
     path = write_portfolio_report(strategy, ev, sources, cash_ok=cash is not None)
     print(f"  Overall: {ev.verdict}. Report: {path.relative_to(path.parents[2])}")
+
+
+def record_look(idea, evaluations, reason):
+    """Log this run's view of the 2018+ results (skipped if these exact numbers were seen before)."""
+    numbers = []
+    for ev in evaluations:
+        m = ev.metrics.loc[("test", "strategy")]
+        numbers += [ev.ticker, ev.strategy_label, m.sharpe, m.cagr, m.max_drawdown, m.n_trades]
+    new = trials.log_look(idea, reason or "not given (run without --reason)", trials.results_fingerprint(numbers))
+    n = len(trials.looks_for(idea))
+    print(f"  Test-period look #{n} for {idea} logged." if new else
+          f"  Same 2018+ numbers as an earlier run: not a new look ({n} so far for {idea}).")
 
 
 def print_evaluation(ticker, label, ev):
