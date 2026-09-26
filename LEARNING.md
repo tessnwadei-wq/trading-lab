@@ -1,0 +1,128 @@
+# Learning notes (glossary)
+
+Plain-English explanations of every concept used in the lab. Add to it whenever something new comes up.
+
+## Basics
+
+**Backtest**: Replaying history to see what *would* have happened if you'd followed a rule. Useful, but
+it's easy to fool yourself, which is why the lab has a Skeptic.
+
+**Rules-based strategy**: A strategy written as exact rules a computer can follow ("buy when X, sell when Y"),
+with no gut feel. That makes it testable.
+
+**Long-only**: You can only own an asset or hold cash. You can't bet on prices falling ("shorting").
+
+**Buy-and-hold**: Buy on day one and never sell. The simplest possible strategy, and surprisingly hard to beat.
+Every strategy must be compared with it.
+
+**Broad index**: A basket representing a whole market, like the S&P 500 (the 500 biggest US companies).
+We use SPY (an ETF tracking the S&P 500) as our broad index. If a clever strategy can't beat just owning
+the index, there's no reason to use it.
+
+**ETF (Exchange-Traded Fund)**: A fund you buy like a single stock that holds a whole basket. SPY holds the
+S&P 500; XIU.TO holds the 60 biggest Canadian companies; GLD holds gold.
+
+**Daily bar**: One day of price data (open, high, low, close). The lab uses the closing price.
+
+**Adjusted close**: The closing price adjusted for dividends and share splits, so that "price went from A to B"
+reflects what an investor actually earned.
+
+## Costs
+
+**Commission**: The fee (or bid/ask spread) paid each time you trade. Lab default: 0.10% per trade.
+
+**Slippage**: The gap between the price you expected and the price you actually got. Lab default: 0.05%.
+Together that's 0.15% every time we buy *and* every time we sell. Strategies that trade a lot get hit hardest.
+
+## Scorecard numbers
+
+**CAGR (Compound Annual Growth Rate)**: The steady yearly growth rate that would turn your starting money into
+your ending money. "8% CAGR" ≈ the account grew as if it earned 8% every year.
+
+**Volatility**: How bumpy the ride is (how much daily returns swing), expressed per year. Higher = scarier.
+
+**Sharpe ratio**: Return divided by volatility: "how much reward per unit of bumpiness". Lets you compare a calm
+strategy with a wild one fairly. Rough guide: <0.5 weak, ~1 good, >2 in a backtest = be suspicious.
+The lab uses Sharpe as its main "does it beat buy-and-hold?" measure, because a strategy that sits in cash half
+the time *should* earn less, but it should be less bumpy too.
+
+**Drawdown**: How far the account is below its previous high. **Max drawdown** is the worst peak-to-trough fall.
+A -50% drawdown needs a +100% gain to recover, which is why drawdowns matter so much.
+
+**Recovery time**: How long it took to climb back to the old high after the worst fall.
+
+**Win rate**: The share of trades that made money. Trend-following strategies often have low win rates
+(many small losses, a few big wins), so a low win rate isn't automatically bad.
+
+**Time in market**: The share of days the strategy was invested rather than in cash.
+
+**Trade (round trip)**: One buy plus the matching sell.
+
+## The Skeptic's concepts
+
+**Look-ahead bias**: Accidentally using information you wouldn't have had at the time, e.g. deciding on
+Monday using Tuesday's price. It makes backtests look amazing and is the #1 beginner mistake. The lab prevents it
+by acting one day *after* each decision, and tests for it with a **truncation test**: hide the future and check that
+no past decision changes.
+
+**In-sample / training period**: The data you're allowed to study and tune on (here, 2005–2017).
+
+**Out-of-sample / test period**: Data kept aside and used **once**, after all choices are frozen (here, 2018 onward).
+It's the closest thing to "the future" a backtest has. If you peek and re-tune, it stops being a fair test.
+
+**Overfitting (curve fitting)**: Tuning a rule so precisely to past data that it captures random noise rather than a
+real pattern. It looks brilliant in training and disappoints on new data. See `strategies/overfit_demo.py`.
+
+**Multiple testing / data snooping**: If you try enough rules, some will look great by pure luck. Trying 1,920
+combinations and keeping the best is almost guaranteed to find a "lucky" one. That's why the journal records
+*every* experiment, including failures.
+
+**Parameter**: A number inside a rule, like the "200" in "200-day moving average".
+
+**Parameter sensitivity**: Checking whether nearby parameter values (190, 210…) also work. A real effect is usually a
+smooth "hill"; a fluke is a lone spike (a "magic number").
+
+**Sample size**: How many trades the result is based on. With fewer than ~30 trades, luck can easily explain the
+result. Like judging a coin after 5 flips.
+
+**Regime**: A period with a distinct market "mood": a crash (2008, 2020), a slow bear market (2022), a calm bull
+market. Good strategies shouldn't fall apart in one regime.
+
+**Synthetic (demo) data**: Made-up prices generated by a computer to *resemble* real markets. Useful for testing
+that code works; useless for judging a strategy. A strategy tested only on synthetic data can never be approved.
+
+**Whipsaw**: When a trend rule sells after a drop and then has to buy back higher after a quick rebound, losing a
+little each time. The 2020 crash-and-rebound is a classic whipsaw period for trend filters.
+
+## Strategies
+
+**Moving average (MA)**: The average closing price over the last N days, recalculated daily. It smooths out noise.
+The **200-day MA** is a widely watched "long-term trend" line.
+
+**Trend filter**: A rule that's invested only when the trend is up (e.g. price above its 200-day MA) and in cash
+otherwise. It aims to sidestep big crashes, at the cost of some whipsaws.
+
+**Moving-average crossover**: Invested when a fast (short) MA is above a slow (long) MA.
+
+**Band (buffer)**: Requiring the price to move a few % past a line before switching, to reduce whipsaws.
+
+## Other markets (coming later)
+
+**Commodity**: A raw material like gold, oil or wheat. Gold (GLD) doesn't pay dividends or earnings; its price is
+driven by fear, interest rates and the US dollar.
+
+**Forex (FX)**: Trading one currency against another. **USD/CAD** (Yahoo ticker `CAD=X`) is how many Canadian dollars
+one US dollar buys. When it goes up, the CAD got weaker.
+
+**Correlation**: How much two things move together, from -1 (opposite) through 0 (unrelated) to +1 (in lockstep).
+Combining assets with low correlation smooths a portfolio.
+
+**Leverage**: Trading with borrowed money so gains *and losses* are multiplied. Common in forex; not allowed in this lab.
+
+## Risk (enforced from phase 2)
+
+**Position size**: How much money goes into one trade.
+
+**Risk per trade**: How much you'd lose if the trade hits its exit. The lab's rule: max 1% of the account.
+**Max open positions / max position size**: No more than 5 trades at once and no more than 20% of the account in one.
+**Drawdown circuit breaker**: If the account falls 10% from its peak, stop opening trades and review.
