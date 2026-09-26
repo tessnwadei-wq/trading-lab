@@ -13,11 +13,13 @@ A personal, rules-based **trading research lab** for learning. It tests trading 
 | `data/csv/` | **The price files the lab uses** (SPY, XIU_TO, GLD, CAD_X and IRX), committed to git so everyone gets the same numbers. |
 | `lab/data.py` | Reads `data/csv/`; downloads a missing file (Yahoo Finance → Stooq) and re-downloads everything with `--refresh`. |
 | `lab/cash.py` | Interest on cash: the T-bill rate earned whenever a strategy is out of the market. |
-| `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs and cash interest. |
+| `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs and cash interest. Decisions made at a day's close are traded at the **next** day's close. |
 | `lab/portfolio.py` | Phase 2: one strategy on several assets as one account, with the CLAUDE.md risk rules enforced. |
+| `lab/breaker.py` | The drawdown circuit breaker. In a backtest it assumes a 21-trading-day review; in paper trading it waits for a manual reset. |
+| `reset_circuit_breaker.py` | The manual reset for paper trading (a later phase): `--who` and `--reason` are required and every reset is logged. |
 | `lab/metrics.py` | Scorecard numbers: yearly growth, worst fall, Sharpe ratio (above the cash rate), win rate, etc. |
 | `lab/skeptic.py` | Runs the Skeptic Checklist (PASS / WARN / FAIL per check) and gives a PASS / FAIL / NEEDS MORE DATA verdict. |
-| `lab/trials.py` | The over-search counter: how many things the lab has tried (`journal/trials.csv`), and the "luck bar". |
+| `lab/trials.py` | The over-search counter: how many things the lab has tried (`journal/trials.csv`), the "luck bar", and every look at the 2018+ test period (`journal/test_period_looks.csv`). |
 | `lab/report.py` | Writes `reports/<strategy>/report.md` with charts. |
 | `lab/config.py` | The ground rules as numbers: costs, the 2018 train/test split, the assets. |
 | `strategies/` | One file per trading idea. `ma_trend.py` is the simple example; `overfit_demo.py` shows what *not* to do. |
@@ -84,7 +86,17 @@ python run_lab.py --strategy ma_trend            # just one strategy
 python run_lab.py --strategy portfolio_ma_trend  # just the SPY + XIU.TO + GLD portfolio with risk rules
 python run_lab.py --refresh                      # re-download EVERY price file, then run
 python run_lab.py --demo                         # practice mode with made-up data
+python run_lab.py --reason "why I'm looking"     # recorded in journal/test_period_looks.csv
 ```
+
+**Every real-data run is a look at the test period.** The reports show 2018+ results, and the rules say those
+should be seen once per idea. So each run is logged in `journal/test_period_looks.csv` with the date and your
+`--reason`, and each report shows how many looks its idea has had. Re-running with nothing changed gives the same
+numbers and isn't counted twice. Commit that file along with the reports.
+
+**When trades happen.** A strategy decides at a day's closing price and the lab trades at the *next* day's close
+(you can't trade at a closing price you've only just seen). Each report has a *Timing cost* table showing how much
+rosier the results looked with the old "same close" timing.
 
 **Keeping the data current with `--refresh`.** A normal run always uses the files already in `data\csv\`,
 so without a refresh the data slowly goes stale. `--refresh` re-downloads every ticker (SPY, XIU.TO, GLD,

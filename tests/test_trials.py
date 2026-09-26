@@ -29,3 +29,48 @@ def test_chance_real_falls_as_the_search_grows():
     one = trials.chance_real(0.6, 1, 12)
     many = trials.chance_real(0.6, 2000, 12)
     assert one > 0.95 and many < 0.1
+
+
+# ---- Test-period looks ------------------------------------------------------------------
+def test_each_look_is_logged_with_date_and_reason(tmp_path):
+    path = tmp_path / "looks.csv"
+    assert trials.log_look("idea_a", "first real run", "abc", path=path, today="2026-10-01")
+    assert trials.log_look("idea_a", "after a fix", "def", path=path, today="2026-10-02")
+    assert trials.log_look("idea_b", "first", "abc", path=path)          # same numbers, different idea: counts
+    looks = trials.looks_for("idea_a", path=path)
+    assert [(r["date"], r["reason"]) for r in looks] == [("2026-10-01", "first real run"), ("2026-10-02", "after a fix")]
+
+
+def test_seeing_the_same_numbers_again_is_not_a_new_look(tmp_path):
+    path = tmp_path / "looks.csv"
+    fp = trials.results_fingerprint(["SPY", 0.61, 0.093, -0.21, 26])
+    assert trials.log_look("idea_a", "run", fp, path=path)
+    assert not trials.log_look("idea_a", "re-run, nothing changed", fp, path=path)
+    changed = trials.results_fingerprint(["SPY", 0.60, 0.093, -0.21, 26])
+    assert changed != fp and trials.log_look("idea_a", "after a change", changed, path=path)
+    # Hand-logged (backfilled) looks have no fingerprint and are always added.
+    assert trials.log_look("idea_a", "backfilled", "", path=path)
+    assert trials.log_look("idea_a", "backfilled", "", path=path)
+    assert len(trials.looks_for("idea_a", path=path)) == 4
+
+
+def test_run_lab_records_a_look_and_the_report_shows_the_count(tmp_path, monkeypatch, demo_prices):
+    import run_lab
+    from lab import report
+    from lab.skeptic import evaluate
+    from strategies.ma_trend import MATrend
+
+    monkeypatch.setattr(trials, "LOOKS_CSV", tmp_path / "looks.csv")
+    ev = evaluate(MATrend(), demo_prices["SPY"], demo_prices["SPY"], "SPY", is_demo=False)
+    run_lab.record_look("ma_trend", [ev], "testing the counter")
+    run_lab.record_look("ma_trend", [ev], "same numbers again")      # not a new look
+    assert len(trials.looks_for("ma_trend")) == 1
+    text = report.looks_section("ma_trend", is_demo=False)
+    assert "seen **1 time**" in text and "testing the counter" in text
+    assert "looks for this idea: 1" in report.looks_line("ma_trend", is_demo=False)
+
+
+def test_the_backfilled_session_two_looks_are_in_the_real_log():
+    looks = trials.read_looks()
+    portfolio = [r for r in looks if r["idea"] == "portfolio_ma_trend" and "Session 2" in r["reason"]]
+    assert len(portfolio) == 3

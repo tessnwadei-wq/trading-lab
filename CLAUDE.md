@@ -56,5 +56,11 @@ Sharpe ratios are measured on returns above the cash (T-bill) rate, and cash ear
 - Prices live in `data/csv/` and are committed. `python run_lab.py --refresh` re-downloads and overwrites them.
 - `lab/portfolio.py` runs a strategy on SPY, XIU.TO and GLD as one account with the risk rules enforced.
 - Every real-data test is counted in `journal/trials.csv` (the over-search counter). Never delete rows.
+- Every look at 2018+ results is logged in `journal/test_period_looks.csv` (`run_lab.py --reason` does it). Log looks
+  made any other way by hand. Never delete rows.
+- Trades fill at the next day's close (`config.EXECUTION = "next_close"`). `execution="same_close"` exists only for the
+  reports' "Timing cost" table; never use it to judge a strategy.
+- The circuit breaker lives in `lab/breaker.py`: a fixed review period in backtests, a manual logged reset
+  (`reset_circuit_breaker.py`) in paper mode.
 - Experiments are logged in `journal/` (see `journal/README.md` for the format).
 - Run `python -m pytest` before opening a pull request. It must pass.

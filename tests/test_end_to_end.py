@@ -21,7 +21,10 @@ def test_run_lab_demo_end_to_end(tmp_path, monkeypatch):
 
     monkeypatch.setattr(report, "REPORTS_DIR", tmp_path)            # don't overwrite the real reports
     monkeypatch.setattr(trials, "TRIALS_CSV", tmp_path / "trials.csv")
+    monkeypatch.setattr(trials, "LOOKS_CSV", tmp_path / "looks.csv")
     assert run_lab.main(["--demo", "--strategy", "portfolio_ma_trend"]) == 0
     text = (tmp_path / "portfolio_ma_trend" / "report.md").read_text(encoding="utf-8")
     assert "DEMO DATA" in text and "## Risk manager" in text and "Same-risk mix" in text
     assert not (tmp_path / "trials.csv").exists()  # demo runs are never counted as trials
+    assert not (tmp_path / "looks.csv").exists()   # ...or as looks at the test period
+    assert "Timing cost" in text and "trading days" in text   # timing table and breaker assumption shown

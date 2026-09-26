@@ -24,6 +24,17 @@ COMMISSION = 0.0010  # 0.10% broker fee / spread
 SLIPPAGE = 0.0005    # 0.05% "we got a slightly worse price than the chart shows"
 COST_PER_TRADE = COMMISSION + SLIPPAGE  # 0.15% each way
 
+# ---- Trade timing (execution) ------------------------------------------------------
+# We only have closing prices. A decision made from day t's close can't be traded AT that same close:
+# the close is the last price of the day, and by the time you've seen it the market has shut.
+# So every trade happens at the NEXT day's close (t+1), and gains or losses count from then on.
+#   "next_close"  the default, used everywhere: backtests, portfolio, benchmarks, the Skeptic.
+#   "same_close"  the old, slightly optimistic behaviour (trade at the very close you decided on).
+#                 Kept ONLY for the "Timing cost" comparison table in each report. Never judge a
+#                 strategy with it.
+EXECUTION = "next_close"
+EXECUTION_MODES = ("next_close", "same_close")
+
 # ---- Assets ------------------------------------------------------------------
 TRADED_ASSETS = ["SPY", "XIU.TO"]      # strategies are tested on these
 BROAD_INDEX = "SPY"                    # the "broad index" every strategy is compared against
@@ -71,10 +82,21 @@ MAX_POSITION_WEIGHT = 0.20       # at most 20% of the account in any one positio
 TRIM_BACK_TO = 0.18              # a position that grows past 20% is cut back to 18%, not 20%, so a
                                  # rising position isn't trimmed by a sliver (and charged costs) every day
 MAX_OPEN_POSITIONS = 5
-CIRCUIT_BREAKER_DRAWDOWN = 0.10  # after a 10% fall from the peak, open no new trades...
-CIRCUIT_BREAKER_REVIEW_DAYS = 21  # ...for ~1 month (a simulated "review"), then resume from there
-# Hard floor: if the account ever falls 20% below its ALL-TIME high, stop opening trades for good (no
-# automatic restart). In real life only Tessy could restart it. Added after the risk-manager review.
+CIRCUIT_BREAKER_DRAWDOWN = 0.10  # after a 10% fall from the peak, open no new trades until a review
+
+# What "until a review" means depends on the mode (see lab/breaker.py):
+#  * paper/live mode (future): new trades stay blocked until Tessy runs `python reset_circuit_breaker.py`,
+#    which logs who reset it, when, and why. Nothing restarts by itself.
+#  * backtest mode: nobody can press "reset" inside a simulation, so we ASSUME the review takes a fixed
+#    CIRCUIT_BREAKER_REVIEW_DAYS trading days, after which trading resumes and today's value becomes the
+#    new peak. This is an explicit modelling assumption, printed in every portfolio report.
+# Why 21: about one calendar month, i.e. "Tessy reviews the lab once a month" (common sense, a normal
+# monthly review cadence). It was NOT chosen by looking at results: on 2005-2017 training data the
+# portfolio's breaker never triggered, so N could not have been tuned there, and the test period was
+# never used to pick it.
+CIRCUIT_BREAKER_REVIEW_DAYS = 21
+# Hard floor: if the account ever falls 20% below its ALL-TIME high, stop opening trades for good. In a
+# backtest there is no restart at all; in paper mode only a manual reset (with a reason) restarts it.
 CIRCUIT_BREAKER_HARD_STOP = 0.20
 
 # The exit distance used to measure risk: a protective stop placed STOP_ATR_MULTIPLE times the

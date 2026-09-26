@@ -7,8 +7,9 @@ A strategy is just:
   * a function that looks at prices and says, for each day, 1 = invested or 0 = cash.
 
 Rule for every strategy: the value for day t may only use prices up to and including
-day t. The backtester waits one day before acting, so strategies must NOT shift signals
-themselves. tests/test_lookahead.py checks this automatically for every strategy.
+day t's close. The backtester then TRADES at the next day's close (t+1), so strategies must NOT
+shift signals themselves. tests/test_lookahead.py and tests/test_execution.py check this
+automatically for every strategy.
 """
 
 from __future__ import annotations

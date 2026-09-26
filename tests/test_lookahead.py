@@ -37,24 +37,37 @@ def test_cheating_strategy_is_caught(demo_prices):
     assert "future" in msg
 
 
-def test_backtester_acts_one_day_after_the_signal():
-    # Price jumps +10% on day 3. A signal raised ON day 3 (after seeing the jump)
-    # must NOT earn that jump; it only affects day 4 onwards.
-    prices = make_prices([100, 100, 100, 110, 110, 110])
+def test_trade_fills_at_the_next_close_not_the_decision_close():
+    # A signal raised at day 3's close is BOUGHT at day 4's close, so it earns nothing until day 5.
+    # Day 4's +10% jump happens after the decision but BEFORE we could trade: we must miss it.
+    # (The old engine bought at day 3's close and wrongly earned the day-4 jump.)
+    prices = make_prices([100, 100, 100, 100, 110, 121])
     signal = pd.Series([0, 0, 0, 1, 1, 1], index=prices.index, dtype=float)
     res = run_backtest(prices, signal, cost_multiplier=0)
-    assert res.position.tolist() == [0, 0, 0, 0, 1, 1]
-    assert res.equity.iloc[-1] == pytest.approx(1.0)  # we missed the jump, as we should
+    assert res.position.tolist() == [0, 0, 0, 0, 0, 1]
+    assert res.equity.iloc[-1] == pytest.approx(1.10)    # only day 5's +10%
+    old = run_backtest(prices, signal, cost_multiplier=0, execution="same_close")
+    assert old.position.tolist() == [0, 0, 0, 0, 1, 1]
+    assert old.equity.iloc[-1] == pytest.approx(1.21)    # the optimistic old answer
 
 
-def test_cheater_looks_brilliant_without_the_lag(demo_prices):
-    # Why this matters: the cheating rule makes a fortune in a backtest. If a result
-    # ever looks this good, suspect look-ahead bias first.
+class PeeksTwoDaysAhead(Strategy):
+    """Deliberately broken: 'buy if the price will rise from tomorrow to the day after'."""
+    name = "cheater2"
+
+    def generate_signals(self, prices):
+        close = prices["Close"]
+        return (close.shift(-2) > close.shift(-1)).astype(float)
+
+
+def test_cheater_looks_brilliant(demo_prices):
+    # Why this matters: a rule that reads the future makes a fortune in a backtest. If a result
+    # ever looks this good, suspect look-ahead bias first. (Trading a day later doesn't save us
+    # from a rule that reads far enough ahead; only the truncation test catches that.)
     prices = demo_prices["SPY"].loc["2010":"2012"]
-    # Even with the backtester's one-day delay, the cheater still "knows" the next move,
-    # because its rule reads tomorrow's price.
-    res = run_backtest(prices, CheatingStrategy().generate_signals(prices))
+    res = run_backtest(prices, PeeksTwoDaysAhead().generate_signals(prices))
     assert res.equity.iloc[-1] > 10  # >10x in 3 years: impossible without seeing the future
+    assert not lookahead_check(PeeksTwoDaysAhead(), prices)[0]
 
 
 def test_overfit_search_refuses_test_period_data(demo_prices):

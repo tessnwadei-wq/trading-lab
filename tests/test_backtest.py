@@ -14,9 +14,10 @@ def test_costs_default_to_the_project_rules():
 
 
 def test_buy_and_hold_pays_one_entry_cost():
-    prices = make_prices([100, 100, 120])
+    prices = make_prices([100, 100, 100, 120])
     res = buy_and_hold(prices)
-    # Day 0: no position yet. Day 1: bought (pay cost), price flat. Day 2: +20%.
+    # Day 0: decide to buy. Day 1: bought at the close. Day 2: first day held (cost charged), flat.
+    # Day 3: +20%.
     assert res.equity.iloc[-1] == pytest.approx((1 - C) * 1.2)
     assert res.n_trades == 1
 
@@ -38,9 +39,11 @@ def test_cash_earns_nothing_and_misses_moves():
 
 
 def test_trades_are_listed_with_returns():
-    prices = make_prices([100, 100, 110, 110, 100, 100, 100, 90])
+    prices = make_prices([100, 100, 110, 110, 110, 100, 100, 90])
     signal = pd.Series([1, 1, 1, 0, 0, 1, 1, 1], index=prices.index, dtype=float)
     res = run_backtest(prices, signal, cost_multiplier=0)
+    # Decided day 0, bought at day 1's close, held days 2-4; "out" decided day 3, sold at day 4's close.
+    assert res.position.tolist() == [0, 0, 1, 1, 1, 0, 0, 1]
     assert len(res.trades) == 2
     first, second = res.trades.iloc[0], res.trades.iloc[1]
     assert first["return"] == pytest.approx(0.10)  # held through the 100 -> 110 move

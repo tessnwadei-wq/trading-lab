@@ -11,8 +11,13 @@ Each check gives one of:
   NEEDS MORE DATA  can't tell yet (too few trades).
 
 The rules (kept deliberately simple so a beginner can argue with them):
-  1 Look-ahead   Signals computed on data cut off at day X must equal the signals computed
-                 on the full data, for every day up to X. Otherwise the strategy is peeking.
+  1 Look-ahead   Two tests, both must pass:
+                 (a) Truncation: signals computed on data cut off at day X must equal the signals
+                     computed on the full data, for every day up to X. Otherwise the STRATEGY peeks.
+                 (b) Trade timing: the ENGINE must trade at a close after the one it decided on. We
+                     change one day's closing price (x3, then /3) and check that what was held
+                     over the following day did not change. A backtest that buys at the same close
+                     it used to decide (the lab's old "same_close" timing) fails this test.
   2 Out-of-sample Test (2018+) Sharpe must be above 0 AND at least half the training Sharpe.
   3 Beats the simple alternatives
                  In the test period, after costs, the strategy must beat three simple things you
@@ -48,6 +53,7 @@ import pandas as pd
 
 from lab import config
 from lab.backtest import BacktestResult, buy_and_hold, fixed_mix, run_backtest
+from strategies.base import Strategy
 from lab.metrics import max_drawdown_info, result_sharpe, summarize, volatility
 
 PASS, WARN, FAIL, NMD = "PASS", "WARN", "FAIL", "NEEDS MORE DATA"
@@ -82,6 +88,8 @@ class Subject:
     run_mix: Callable           # (weight, start, end, cost_multiplier): weight in the benchmark, rest in cash
     lookahead: Callable         # () -> (ok, message)
     sensitivity: Callable       # (train_start, train_end) -> (grid, (row param, col param), chosen)
+    run_same_close: Callable = None  # (start, end): the strategy with the OLD same-close timing, for
+                                     # the report's "Timing cost" table only. Never used to judge.
 
 
 @dataclass
@@ -96,6 +104,7 @@ class AssetEvaluation:
     sensitivity_params: tuple     # (row param, column param)
     chosen: tuple                 # chosen (row value, column value)
     regimes: pd.DataFrame
+    timing: pd.DataFrame = None   # key metrics under same-close vs next-close execution
     mix_weight: float = 1.0       # share of the account in the asset(s) for the same-risk mix
     benchmark_name: str = "buy-and-hold"
     checks: list = field(default_factory=list)
@@ -125,6 +134,66 @@ def lookahead_check(strategy, prices: pd.DataFrame, n_cuts: int = 6) -> tuple[bo
     return True, f"Signals stayed identical when the future was hidden ({n_cuts} cut-off dates tested)."
 
 
+class PriceRoseProbe(Strategy):
+    """
+    Not a trading idea: a test probe. "Be invested if today's close is above yesterday's."
+    It reacts to EVERY day's closing price, so if the engine ever trades at the same close it
+    decided on, changing that close is guaranteed to change what gets held.
+    """
+    name = "price_rose_probe"
+
+    def generate_signals(self, prices):
+        close = prices["Close"]
+        signal = (close > close.shift(1)).astype(float)
+        signal.iloc[0] = np.nan
+        return signal
+
+
+def _probe_days(n: int, n_days: int, warm_up: int) -> list[int]:
+    return sorted(set(np.linspace(warm_up, n - 3, n_days).astype(int)))
+
+
+def _shocked(prices: pd.DataFrame, k: int, factor: float) -> pd.DataFrame:
+    """A copy of prices up to day k+2, with day k's closing price multiplied by `factor`."""
+    out = prices.iloc[: k + 3].copy()
+    out.iloc[k, out.columns.get_loc("Close")] *= factor
+    return out
+
+
+def execution_timing_check(prices: pd.DataFrame, execution: str | None = None,
+                           n_days: int = 8) -> tuple[bool, str]:
+    """
+    The trade-timing test for the single-asset backtester.
+
+    Idea: the position that earns the move from close k to close k+1 must already have been bought
+    at (or before) close k. If we traded at a later close than we decided on, that position was
+    decided from data up to close k-1, so changing close k can't change it. We push close k up x3
+    and down to a third, with the probe strategy, and compare what was held over day k+1.
+    """
+    probe = PriceRoseProbe()
+    days = _probe_days(len(prices), n_days, warm_up=5)
+    for k in days:
+        held = []
+        for factor in (3.0, 1 / 3):
+            p = _shocked(prices, k, factor)
+            held.append(run_backtest(p, probe.generate_signals(p), execution=execution).position.iloc[: k + 2])
+        if not held[0].equals(held[1]):
+            day = prices.index[k].date()
+            return False, (f"Changing the closing price of {day} changed what was held right after that close: "
+                           "the backtest trades at the same closing price it used to decide (look-ahead).")
+    return True, (f"Trades happen at the close after the decision: changing a decision day's closing price "
+                  f"never changed what was held over the next day ({len(days)} days tested).")
+
+
+def full_lookahead_check(strategy, prices: pd.DataFrame, execution: str | None = None) -> tuple[bool, str]:
+    """Check 1: the strategy's signals don't peek (truncation) AND the engine trades after deciding (timing)."""
+    ok, msg = lookahead_check(strategy, prices)
+    if not ok:
+        return ok, msg
+    ok2, msg2 = execution_timing_check(prices, execution)
+    return ok2, msg + " " + msg2
+
+
 # --------------------------------------------------------------------------------------
 # The same-risk mix
 # --------------------------------------------------------------------------------------
@@ -144,25 +213,28 @@ def same_risk_weight(strategy_train: BacktestResult, benchmark_train: BacktestRe
 # The main evaluation
 # --------------------------------------------------------------------------------------
 def evaluate(strategy, prices: pd.DataFrame, index_prices: pd.DataFrame, ticker: str,
-             is_demo: bool = False, cash_rate: pd.Series | None = None) -> AssetEvaluation:
-    """Judge one strategy on one asset."""
+             is_demo: bool = False, cash_rate: pd.Series | None = None,
+             execution: str | None = None) -> AssetEvaluation:
+    """Judge one strategy on one asset. execution defaults to config.EXECUTION ("next_close")."""
+    execution = execution or config.EXECUTION
     signal = strategy.generate_signals(prices)
     first = signal.first_valid_index()
     # Measure everything from the first day the strategy could act (after warm-up).
     start = prices.index[prices.index.get_loc(first) + 1]
 
     def run_variant(variant, s, e, cost_multiplier=1.0):
-        return run_backtest(prices, variant.generate_signals(prices), cost_multiplier, s, e, cash_rate)
+        return run_backtest(prices, variant.generate_signals(prices), cost_multiplier, s, e, cash_rate, execution)
 
     subject = Subject(
         ticker=ticker, label=strategy.label(), benchmark_name="buy-and-hold",
         first_day=start, last_day=prices.index[-1],
-        run_strategy=lambda s, e, m=1.0: run_backtest(prices, signal, m, s, e, cash_rate),
-        run_benchmark=lambda s, e, m=1.0: buy_and_hold(prices, s, e, m, cash_rate),
-        run_index=lambda s, e, m=1.0: buy_and_hold(index_prices, s, e, m, cash_rate),
-        run_mix=lambda w, s, e, m=1.0: fixed_mix(prices[["Close"]], {"Close": w}, s, e, m, cash_rate),
-        lookahead=lambda: lookahead_check(strategy, prices),
+        run_strategy=lambda s, e, m=1.0: run_backtest(prices, signal, m, s, e, cash_rate, execution),
+        run_benchmark=lambda s, e, m=1.0: buy_and_hold(prices, s, e, m, cash_rate, execution),
+        run_index=lambda s, e, m=1.0: buy_and_hold(index_prices, s, e, m, cash_rate, execution),
+        run_mix=lambda w, s, e, m=1.0: fixed_mix(prices[["Close"]], {"Close": w}, s, e, m, cash_rate, execution),
+        lookahead=lambda: full_lookahead_check(strategy, prices, execution),
         sensitivity=lambda s, e: sensitivity_grid(strategy, lambda v: run_variant(v, s, e)),
+        run_same_close=lambda s, e: run_backtest(prices, signal, 1.0, s, e, cash_rate, "same_close"),
     )
     return evaluate_subject(subject, is_demo)
 
@@ -193,9 +265,10 @@ def evaluate_subject(subject: Subject, is_demo: bool = False) -> AssetEvaluation
 
     sens, params, chosen = subject.sensitivity(*periods["train"])
     regimes = regime_table(subject)
+    timing = timing_table(subject, periods, results)
 
     ev = AssetEvaluation(subject.ticker, subject.label, is_demo, periods, results, metrics,
-                         sens, params, chosen, regimes, weight, subject.benchmark_name)
+                         sens, params, chosen, regimes, timing, weight, subject.benchmark_name)
     ev.checks = run_checks(subject, ev)
     ev.verdict, ev.reason = verdict(ev.checks, is_demo)
     return ev
@@ -211,6 +284,21 @@ def sensitivity_grid(strategy, run_variant: Callable):
             table.loc[r, c] = result_sharpe(run_variant(strategy.with_params(**{p_row: r, p_col: c})))
     chosen = (strategy.params[p_row], strategy.params[p_col])
     return table, (p_row, p_col), chosen
+
+
+def timing_table(subject: Subject, periods: dict, results: dict) -> pd.DataFrame | None:
+    """
+    The "Timing cost" table: the strategy's key numbers with the old same-close timing next to the
+    real (next-close) ones, at normal costs. It only DESCRIBES how optimistic the old timing was;
+    no check or verdict uses the same-close numbers.
+    """
+    if subject.run_same_close is None:
+        return None
+    rows = []
+    for p, (s, e) in periods.items():
+        for execution, res in (("same_close", subject.run_same_close(s, e)), ("next_close", results[(p, "strategy")])):
+            rows.append({"period": p, "execution": execution, **summarize(res)})
+    return pd.DataFrame(rows).set_index(["period", "execution"])
 
 
 def regime_table(subject: Subject) -> pd.DataFrame:
@@ -284,7 +372,7 @@ def run_checks(subject: Subject, ev: AssetEvaluation) -> list[Check]:
     # 1. Look-ahead
     ok, msg = subject.lookahead()
     checks.append(Check(1, "Look-ahead bias", PASS if ok else FAIL, msg,
-                        "a signal changed when future data was hidden"))
+                        "a decision used data it could not have had when it traded"))
 
     # 2. Out-of-sample
     tr, te = m.loc[("train", "strategy"), "sharpe"], m.loc[("test", "strategy"), "sharpe"]
