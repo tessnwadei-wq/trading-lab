@@ -33,10 +33,16 @@ tried is what stops us fooling ourselves with the one that got lucky.
 | 6 | 2026-09-26 | ma_trend (lab v3: next-close trade timing) | real | FAIL |
 | 7 | 2026-09-26 | overfit_demo (lab v3: next-close timing; the search picked new winners) | real | FAIL |
 | 8 | 2026-09-26 | portfolio_ma_trend (lab v3: next-close timing, manual-reset breaker) | real | FAIL |
+| 9 | 2026-09-27 | portfolio_ma_trend (lab v4: one-day buffer on the 1% rule, 22% alert) | real | FAIL |
+| 10 | 2026-09-27 | vol_target (pre-registered, spec `fc6436b`; one look) | real | FAIL |
 
 Every parameter combination tested on real data is also counted in [`trials.csv`](trials.csv) (the over-search
 counter). Add rows, never remove them; `run_lab.py` does this automatically.
 
 Every time 2018+ results are seen, that "look" is logged in [`test_period_looks.csv`](test_period_looks.csv)
 (date and reason; `python run_lab.py --reason "..."`). Looks made outside `run_lab.py` must be added by hand.
-Circuit-breaker resets (paper trading, later) are logged in `circuit_breaker_resets.csv`.
+Circuit-breaker resets (paper trading, later) are logged in `circuit_breaker_resets.csv`. That log is append-only and
+hash-chained: never edit or shorten it (resets are refused if you do). Only Tessy resets the breaker; agents never do.
+
+New ideas are **pre-registered**: their frozen spec lives in `strategies/specs/` and is committed on its own before the
+first test-period look. If a pre-registered idea fails, any change is a new idea, a new spec and a new look.

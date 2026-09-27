@@ -92,5 +92,7 @@ def summarize(result) -> dict:
         "n_trades": int(len(trades)),
         "win_rate": float((closed["return"] > 0).mean()) if len(closed) else float("nan"),
         "time_in_market": float(pos.mean()),  # average share of the account invested
+        # weight changes of at least 5 percentage points (the sample size of always-partly-invested strategies)
+        "active_rebalances": result.rebalances(config.ACTIVE_REBALANCE_MIN_CHANGE),
     }
 

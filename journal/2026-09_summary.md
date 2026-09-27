@@ -64,3 +64,28 @@ portfolio_ma_trend 4 (see `test_period_looks.csv`; the earlier ones were backfil
 2. **Count looks, not just tries.** Every view of the test period is now logged; ours were 2-4 per idea, not 1.
 3. **Rules need to be written for how trading actually works.** With next-day fills, the 1% and 20% limits can be
    overshot for a day, so their wording and alerts need to say so.
+
+---
+
+## Update, 2026-09-27 (session 4: risk-rule decisions and the first pre-registered idea)
+
+*Added underneath; earlier sections are kept as written.*
+
+**Experiments this month so far:** 10 (2 synthetic, 8 real). **PASS 0 · FAIL 10 · NEEDS MORE DATA 0.**
+**Ideas tested on real data:** 4 (ma_trend, overfit_demo, portfolio_ma_trend, vol_target); **3,845 parameter
+combinations** in `trials.csv` (vol_target added 1 per asset: no search). **Test-period looks:** ma_trend 3,
+overfit_demo 3, portfolio_ma_trend 5, **vol_target 1** (exactly the one the rules allow).
+
+| Date | Strategy | Verdict | One-line reason |
+|---|---|---|---|
+| 2026-09-27 | portfolio_ma_trend (v4) | FAIL | One-day buffer brought stop-outs within 1% (0 of 29 over); still loses to buy-and-hold and the same-risk mix; still BLOCKED for paper trading. |
+| 2026-09-27 | vol_target | FAIL | Beat the same-risk mix after costs in 2018+ by only 0.1-0.6 points a year while being bumpier; lost to buy-and-hold and SPY per unit of risk; missed the 2020 rebound. |
+
+### Top lessons (session 4)
+1. **Freeze the rules before you look.** vol_target's spec, sample-size rule and pass/fail line were committed and pushed
+   before its first and only look, so its result can't be tuned away.
+2. **An edge in training can mostly vanish out of sample.** vol_target beat the same-risk mix by ~2 points a year in
+   2005-2017 and by 0.1-0.6 since 2018, as the published counterpoint (Cederburg et al., 2020) predicted.
+3. **Compare risk as well as return.** A strategy that earns a bit more than the mix while being bumpier hasn't really
+   won; the Sharpe comparison shows it.
+4. **Build the delay into the rule.** Sizing for the one-day wait on stop-sales kept every stop-out within 1%.

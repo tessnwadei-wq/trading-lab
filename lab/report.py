@@ -207,11 +207,15 @@ def mix_head_to_head_md(ev: AssetEvaluation) -> list[str]:
     t, t2 = ev.metrics.loc[("test", "strategy")], ev.metrics.loc[("test", "strategy_2x")]
     m, m2 = ev.metrics.loc[("test", "mix")], ev.metrics.loc[("test", "mix_2x")]
     won = t.cagr > m.cagr and t2.cagr > m2.cagr
-    lines += ["", ("**Answer (test period, 2018+):** " +
-                   ("the strategy earned more than simply owning less of the asset, at normal AND double costs."
-                    if won else "the strategy did **not** earn more than simply owning less of the asset "
-                    f"(normal costs {t.cagr - m.cagr:+.2%} a year, double costs {t2.cagr - m2.cagr:+.2%} a year)."
-                    )), ""]
+    answer = ("the strategy earned more than simply owning less of the asset, at normal AND double costs."
+              if won else "the strategy did **not** earn more than simply owning less of the asset "
+              f"(normal costs {t.cagr - m.cagr:+.2%} a year, double costs {t2.cagr - m2.cagr:+.2%} a year).")
+    if t.volatility > 1.05 * m.volatility:
+        # The mix was sized on training data, so in the test period the two can end up with different risk.
+        answer += (f" **But** in the test period the strategy was bumpier than the mix (volatility "
+                   f"{_pct(t.volatility)} vs {_pct(m.volatility)}), so part of any extra return is simply pay for "
+                   f"extra risk. Per unit of risk (Sharpe) it scored {t.sharpe:.2f} vs the mix's {m.sharpe:.2f}.")
+    lines += ["", "**Answer (test period, 2018+):** " + answer, ""]
     return lines
 
 
@@ -230,17 +234,19 @@ def timing_md(ev: AssetEvaluation) -> list[str]:
     t = ev.timing
     if t is None:
         return []
+    rebal = ev.sample_size_rule == "rebalances"
     lines = ["### Timing cost (when the trade happens)", "",
              "The lab decides at a day's close and trades at the **next** day's close. Before session 3 it traded "
              "at the *same* close it decided on, which you can't do in real life. This table shows the strategy "
              "both ways (normal costs). Only the next-close numbers are used by the Skeptic.", "",
-             "| Period | Timing | CAGR | Sharpe | Max drawdown | Trades |", "|---|---|---:|---:|---:|---:|"]
+             f"| Period | Timing | CAGR | Sharpe | Max drawdown | {'Active rebalances' if rebal else 'Trades'} |",
+             "|---|---|---:|---:|---:|---:|"]
     names = {"same_close": "Same close (old, optimistic)", "next_close": "**Next close (used)**"}
     for p in ("train", "test", "full"):
         for ex in ("same_close", "next_close"):
             r = t.loc[(p, ex)]
             lines.append(f"| {PERIOD_LABEL[p]} | {names[ex]} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
-                         f"{_pct(r.max_drawdown)} | {int(r.n_trades)} |")
+                         f"{_pct(r.max_drawdown)} | {int(r.active_rebalances if rebal else r.n_trades)} |")
     lines += ["", timing_sentence(ev), ""]
     return lines
 

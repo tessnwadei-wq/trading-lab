@@ -13,16 +13,17 @@ A personal, rules-based **trading research lab** for learning. It tests trading 
 | `data/csv/` | **The price files the lab uses** (SPY, XIU_TO, GLD, CAD_X and IRX), committed to git so everyone gets the same numbers. |
 | `lab/data.py` | Reads `data/csv/`; downloads a missing file (Yahoo Finance → Stooq) and re-downloads everything with `--refresh`. |
 | `lab/cash.py` | Interest on cash: the T-bill rate earned whenever a strategy is out of the market. |
-| `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs and cash interest. Decisions made at a day's close are traded at the **next** day's close. |
+| `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs and cash interest. Decisions made at a day's close are traded at the **next** day's close. Holds any weight from 0% to 100% (fractional positions), with costs on each weight change. |
 | `lab/portfolio.py` | Phase 2: one strategy on several assets as one account, with the CLAUDE.md risk rules enforced. |
 | `lab/breaker.py` | The drawdown circuit breaker. In a backtest it assumes a 21-trading-day review; in paper trading it waits for a manual reset. |
-| `reset_circuit_breaker.py` | The manual reset for paper trading (a later phase): `--who` and `--reason` are required and every reset is logged. |
+| `reset_circuit_breaker.py` | The manual reset for paper trading (a later phase). **Human-only: only Tessy runs it; AI agents never do.** Needs `--who`, `--reason` and typing `RESET` (plus an extra step for the 20% hard floor). Every reset goes into an append-only log. |
 | `lab/metrics.py` | Scorecard numbers: yearly growth, worst fall, Sharpe ratio (above the cash rate), win rate, etc. |
 | `lab/skeptic.py` | Runs the Skeptic Checklist (PASS / WARN / FAIL per check) and gives a PASS / FAIL / NEEDS MORE DATA verdict. |
 | `lab/trials.py` | The over-search counter: how many things the lab has tried (`journal/trials.csv`), the "luck bar", and every look at the 2018+ test period (`journal/test_period_looks.csv`). |
 | `lab/report.py` | Writes `reports/<strategy>/report.md` with charts. |
 | `lab/config.py` | The ground rules as numbers: costs, the 2018 train/test split, the assets. |
-| `strategies/` | One file per trading idea. `ma_trend.py` is the simple example; `overfit_demo.py` shows what *not* to do. |
+| `strategies/` | One file per trading idea. `ma_trend.py` is the simple example; `overfit_demo.py` shows what *not* to do; `vol_target.py` is idea #4 (volatility targeting). |
+| `strategies/specs/` | **Pre-registered specs**: each new idea's rules, frozen and committed on their own *before* anyone looks at its 2018+ results. Reports show the spec's commit ID. |
 | `reports/` | The generated reports. Start here to see results. |
 | `journal/` | A diary of every experiment: idea, result, verdict, lesson. |
 | `tests/` | Automatic checks that the lab itself works (especially that nothing "peeks at the future"). |
@@ -70,8 +71,8 @@ Every time after that:
    ```
    It reads the prices in `data\csv\`, tests every strategy (plus the multi-asset portfolio) and
    prints each verdict. Takes under a minute.
-7. **Read the results.** Open `reports\ma_trend\report.md`, `reports\overfit_demo\report.md` and
-   `reports\portfolio_ma_trend\report.md`.
+7. **Read the results.** Open `reports\ma_trend\report.md`, `reports\overfit_demo\report.md`,
+   `reports\vol_target\report.md` and `reports\portfolio_ma_trend\report.md`.
    The easiest way to view them nicely: open the folder in [VS Code](https://code.visualstudio.com/)
    and press `Ctrl+Shift+V` on the report, or push to GitHub and view them there.
 8. **Check the lab still works** (do this after any code change):
