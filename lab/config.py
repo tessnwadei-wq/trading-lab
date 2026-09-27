@@ -58,6 +58,14 @@ ASSET_NAMES = {
 # ---- Skeptic thresholds --------------------------------------------------------
 MIN_TRADES = 30  # fewer trades than this = not enough evidence
 
+# Sample size for ALWAYS-PARTLY-INVESTED strategies (e.g. vol_target), which almost never make a full round trip.
+# Pre-registered in strategies/specs/vol_target.md (section 7) before any results: PASS needs at least
+# MIN_ACTIVE_REBALANCES "active rebalances" (a weight change of at least ACTIVE_REBALANCE_MIN_CHANGE) over the full
+# period AND a test period of at least MIN_TEST_YEARS years. Otherwise NEEDS MORE DATA.
+ACTIVE_REBALANCE_MIN_CHANGE = 0.05   # 5 percentage points: smaller changes barely differ from a constant mix
+MIN_ACTIVE_REBALANCES = 30           # the same bar as MIN_TRADES
+MIN_TEST_YEARS = 5
+
 # Consistency check: WARN if the test-period Sharpe differs from the training Sharpe by more
 # than this, in either direction. Why 0.4: a Sharpe measured over ~8-13 years has a margin of
 # error of roughly +/-0.3 each, so two honest measurements of the SAME edge rarely differ by

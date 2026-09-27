@@ -28,11 +28,13 @@ from lab.report import write_portfolio_report, write_report
 from lab.skeptic import evaluate, overall_verdict
 from strategies.ma_trend import MATrend
 from strategies.overfit_demo import OverfitDemo
+from strategies.vol_target import VolTarget
 
 # Register new strategies here.
 STRATEGIES = {
     "ma_trend": MATrend,
     "overfit_demo": OverfitDemo,
+    "vol_target": VolTarget,
 }
 PORTFOLIOS = {f"portfolio_{name}": name for name in config.PORTFOLIO_STRATEGIES}
 
@@ -90,7 +92,8 @@ def main(argv=None) -> int:
                 notes.append(search_note(ticker, fitted))
             if not args.demo:
                 trials.log_trial(name, ticker, len(search) if search is not None else 1,
-                                 "brute-force search on 2005-2017" if search is not None else "fixed textbook values")
+                                 "brute-force search on 2005-2017" if search is not None
+                                 else getattr(strategy, "how_chosen", "fixed textbook values"))
             ev = evaluate(fitted, prices[ticker], prices[config.BROAD_INDEX], ticker, is_demo=args.demo, cash_rate=cash)
             evaluations.append(ev)
             print_evaluation(ticker, fitted.label(), ev)

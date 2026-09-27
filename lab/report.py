@@ -7,6 +7,7 @@ open it in any text editor or in VS Code's preview.
 
 from __future__ import annotations
 
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -166,15 +167,52 @@ def _pct(x, d=1):
 
 
 def metrics_table(ev: AssetEvaluation) -> str:
-    lines = ["| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Avg. share invested |",
+    rebal = ev.sample_size_rule == "rebalances"
+    count_col = f"Active rebalances (≥{config.ACTIVE_REBALANCE_MIN_CHANGE * 100:.0f} pts)" if rebal else "Trades"
+    lines = [f"| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | {count_col} | Win rate | Avg. share invested |",
              "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for p in ("train", "test", "full"):
         for who in ("strategy", "strategy_2x", "buy_hold", "index", "mix"):
             r = ev.metrics.loc[(p, who)]
+            is_strat = who.startswith("strategy")
+            count = (ev.results[(p, who)].rebalances(config.ACTIVE_REBALANCE_MIN_CHANGE) if rebal and is_strat
+                     else "-" if rebal else int(r.n_trades))
+            win = "-" if rebal or not is_strat else _pct(r.win_rate, 0)
             lines.append(f"| {PERIOD_LABEL[p]} | {who_label(ev, who)} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
-                         f"{_pct(r.max_drawdown)} | {_pct(r.volatility)} | {int(r.n_trades)} | "
-                         f"{_pct(r.win_rate, 0) if who.startswith('strategy') else '-'} | {_pct(r.time_in_market, 0)} |")
+                         f"{_pct(r.max_drawdown)} | {_pct(r.volatility)} | {count} | {win} | "
+                         f"{_pct(r.time_in_market, 0)} |")
     return "\n".join(lines)
+
+
+def mix_head_to_head_md(ev: AssetEvaluation) -> list[str]:
+    """
+    The key question for a strategy that mostly changes HOW MUCH it owns: does it beat simply owning less
+    (the same-risk mix), at normal and double costs? Shown for every strategy; it is check 3's mix comparison.
+    """
+    x = ev.mix_weight
+    lines = ["### Head to head: strategy vs the same-risk mix", "",
+             f"The same-risk mix is {x:.0%} in {'the assets' if ev.ticker == 'Portfolio' else ev.ticker} + "
+             f"{1 - x:.0%} cash, rebalanced monthly, sized on 2005-2017 so it is as bumpy as the strategy was there. "
+             "At equal risk the fair question is \"who earned more?\", so the yearly return (CAGR) decides.", "",
+             "| Period | Costs | Strategy CAGR | Mix CAGR | Difference (points a year) | Strategy volatility | "
+             "Mix volatility | Strategy worst fall | Mix worst fall |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for p in ("train", "test", "full"):
+        for label, sfx in (("normal", ""), ("double", "_2x")):
+            a, b = ev.metrics.loc[(p, "strategy" + sfx)], ev.metrics.loc[(p, "mix" + sfx)]
+            diff = (a.cagr - b.cagr) * 100
+            bold = "**" if p == "test" else ""
+            lines.append(f"| {bold}{PERIOD_LABEL[p]}{bold} | {label} | {_pct(a.cagr)} | {_pct(b.cagr)} | "
+                         f"{bold}{diff:+.2f}{bold} | {_pct(a.volatility)} | {_pct(b.volatility)} | "
+                         f"{_pct(a.max_drawdown)} | {_pct(b.max_drawdown)} |")
+    t, t2 = ev.metrics.loc[("test", "strategy")], ev.metrics.loc[("test", "strategy_2x")]
+    m, m2 = ev.metrics.loc[("test", "mix")], ev.metrics.loc[("test", "mix_2x")]
+    won = t.cagr > m.cagr and t2.cagr > m2.cagr
+    lines += ["", ("**Answer (test period, 2018+):** " +
+                   ("the strategy earned more than simply owning less of the asset, at normal AND double costs."
+                    if won else "the strategy did **not** earn more than simply owning less of the asset "
+                    f"(normal costs {t.cagr - m.cagr:+.2%} a year, double costs {t2.cagr - m2.cagr:+.2%} a year)."
+                    )), ""]
+    return lines
 
 
 def regime_md(ev: AssetEvaluation) -> str:
@@ -426,6 +464,23 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
     return "\n".join(lines)
 
 
+def weight_chart(ev: AssetEvaluation, path: Path):
+    """Fractional strategies: share of the account in the asset over time, with the same-risk mix's fixed share."""
+    res = ev.results[("full", "strategy")]
+    fig, ax = plt.subplots(figsize=(9, 3.2))
+    _style(ax, f"{ev.ticker}: share of the account invested (the rest is cash)")
+    ax.plot(res.position.index, res.position, color=COLORS["strategy"], linewidth=1.0, label="Strategy")
+    ax.axhline(ev.mix_weight, color=COLORS["mix"], linewidth=1.6, linestyle="--", label=who_label(ev, "mix"))
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    ax.set_ylim(0, 1.05)
+    start, end = ev.periods["full"]
+    _shade_test(ax, start - pd.Timedelta(days=60), end + pd.Timedelta(days=60))
+    ax.legend(frameon=False, fontsize=9, loc="lower left")
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
 def exposure_chart(ev: AssetEvaluation, path: Path):
     """Stacked area: share of the account in each asset over time (the rest is cash)."""
     w = ev.results[("full", "strategy")].weights
@@ -473,8 +528,13 @@ def _asset_section(ev: AssetEvaluation, out_dir: Path) -> list[str]:
                 f"In the test period its volatility was {ev.metrics.loc[('test', 'mix'), 'volatility']:.1%} vs the "
                 f"strategy's {ev.metrics.loc[('test', 'strategy'), 'volatility']:.1%}. If the strategy can't earn more than "
                 "this simple mix, it is just a complicated way of owning less of the asset.")
+    weight_md = []
+    if ev.sample_size_rule == "rebalances":
+        weight_chart(ev, out_dir / f"{t}_weight.png")
+        weight_md = ["### How much was invested", "",
+                     f"![{ev.ticker} share invested]({t}_weight.png)", ""]
     return [f"### Skeptic Checklist", "", checklist_md(ev), "",
-            mix_note, "",
+            mix_note, ""] + mix_head_to_head_md(ev) + weight_md + [
             "### Equity curve", "",
             f"![{ev.ticker} equity curve]({t}_equity.png)", "",
             "### Drawdown", "", f"![{ev.ticker} drawdown]({t}_drawdown.png)", "",
@@ -508,6 +568,35 @@ def _header(title: str, rule: str, evaluations, overall, sources, cash_ok: bool)
     return md
 
 
+def spec_md(strategy, is_demo: bool) -> str:
+    """
+    Pre-registration box for strategies with a frozen spec: the spec's commit ID, checked against git when
+    git is available, and the statement that the spec came before any test-period look.
+    """
+    commit, path = getattr(strategy, "spec_commit", None), getattr(strategy, "spec_path", None)
+    if not commit:
+        return ""
+    check = "(couldn't check with git here)"
+    try:
+        when = subprocess.run(["git", "show", "-s", "--format=%ci", commit], cwd=ROOT, capture_output=True,
+                              text=True, check=True).stdout.strip()
+        files = subprocess.run(["git", "show", "--name-only", "--format=", commit], cwd=ROOT, capture_output=True,
+                               text=True, check=True).stdout.split()
+        check = (f"committed {when}; checked with git: that commit contains only `{path}`" if files == [path]
+                 else f"committed {when}; ⚠️ that commit also changed: {', '.join(f for f in files if f != path)}")
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    from lab import trials
+    looks = trials.looks_for(strategy.name)
+    first = (f"The first test-period look was logged on {looks[0]['date']} (\"{looks[0]['reason']}\")."
+             if looks and not is_demo else "")
+    return "\n".join([
+        "> **Pre-registered.** The rules were frozen in "
+        f"[`{path}`](../../{path}) **before any code was written and before any look at the 2018+ test "
+        f"period.** Spec commit: `{commit}` ({check}). {first} No parameter search was done; if the idea fails, "
+        "any change is a new idea with a new spec and a new look.", ""])
+
+
 def write_report(strategy, evaluations: list[AssetEvaluation], overall: str, sources: dict,
                  all_prices: dict, extra_md: str = "", cash_ok: bool = True) -> Path:
     out_dir = REPORTS_DIR / strategy.name
@@ -515,6 +604,11 @@ def write_report(strategy, evaluations: list[AssetEvaluation], overall: str, sou
     is_demo = any(e.is_demo for e in evaluations)
 
     md = _header(strategy.name, strategy.description, evaluations, overall, sources, cash_ok)
+    pre = spec_md(strategy, is_demo)
+    if pre:
+        md += [pre, ""]
+    if getattr(strategy, "report_note", ""):
+        md += [strategy.report_note, ""]
     if extra_md:
         md += [extra_md, ""]
     for ev in evaluations:

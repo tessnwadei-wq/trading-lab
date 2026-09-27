@@ -266,6 +266,16 @@ def test_one_day_delay_on_a_stop_sale_stays_within_one_percent():
     assert -config.MAX_RISK_PER_TRADE <= stops.loss_of_account.iloc[0] < -0.004
     assert res.risk.stops_over_budget == 0
     assert res.risk.worst_stop_loss == pytest.approx(stops.loss_of_account.iloc[0])
+    # The same trade without the buffer really does go over budget (so the buffer is doing the work).
+    import lab.config as cfg
+    old = cfg.STOP_FILL_BUFFER_MOVES
+    try:
+        cfg.STOP_FILL_BUFFER_MOVES = 0.0
+        unbuffered = run(book(A=np.concatenate([calm, drop])))
+    finally:
+        cfg.STOP_FILL_BUFFER_MOVES = old
+    assert unbuffered.risk.stops_over_budget == 1
+    assert unbuffered.risk.worst_stop_loss < -config.MAX_RISK_PER_TRADE
 
 
 def test_alert_when_a_position_ends_a_day_above_22_percent():
@@ -286,3 +296,43 @@ def test_no_alert_for_the_normal_one_day_drift_above_20_percent():
     rising = np.concatenate([wiggle(30, 0.002), wiggle(30, 0.002)[-1] * np.cumprod(np.full(30, 1.02))])
     res = run(book(UP=rising))
     assert res.risk.days_over_cap >= 1 and res.risk.alerts == []
+
+
+def test_never_six_positions_when_a_market_is_shut_for_a_day():
+    # Found by the session-4 risk review. Five positions are open. One (A0) is told to sell, but its market is
+    # shut the next day, so the sale can't fill. A sixth asset wants in at the same time. It must wait until
+    # the sale has actually filled, so there are never 6 positions at a close.
+    class OutOnDay40(AlwaysIn):
+        def generate_signals(self, prices):
+            s = super().generate_signals(prices)
+            if prices.attrs.get("seller"):
+                s.iloc[40:] = 0.0
+            if prices.attrs.get("late"):
+                s.iloc[:40] = 0.0
+            return s
+
+    n = 70
+    frames = book(**{f"A{i}": wiggle(n, 0.002) for i in range(6)})
+    frames["A0"].attrs["seller"] = True
+    frames["A5"].attrs["late"] = True
+    shut = frames["A0"].index[41]                 # A0's market is shut the day its sale would fill
+    frames["A0"] = frames["A0"].drop(shut)
+    res = run(frames, OutOnDay40())
+    held = (res.weights > 0).sum(axis=1)
+    assert held.max() <= config.MAX_OPEN_POSITIONS
+    assert res.risk.max_open_positions <= config.MAX_OPEN_POSITIONS
+    late = res.trades[res.trades.asset == "A5"]
+    a0_exit = res.trades[res.trades.asset == "A0"].exit.iloc[0]
+    assert len(late) == 1 and late.entry.iloc[0] > a0_exit   # A5 got in, but only after A0 was sold
+
+
+def test_alert_fires_even_on_a_day_the_asset_market_is_shut():
+    # A (20%) sits on a holiday while the other positions crash: A's share of the account jumps above 22% that day.
+    n = 60
+    frames = book(A=wiggle(n, 0.002), B=wiggle(n, 0.002), C=wiggle(n, 0.002), D=wiggle(n, 0.002))
+    for x in "BCD":
+        frames[x].iloc[40:, 0] *= 0.6
+    holiday = frames["A"].index[40]
+    frames["A"] = frames["A"].drop(holiday)
+    res = run(frames)
+    assert any(al["date"] == holiday and al["asset"] == "A" for al in res.risk.alerts)

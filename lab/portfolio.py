@@ -269,8 +269,10 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
                         and not entry_order[a])
             if not wants_in or np.isnan(move[j, a]) or move[j, a] <= 0:
                 continue
-            # Positions open once today's orders are filled.
-            n_open = sum(held) - sum(1 for x in exit_order if x) + sum(1 for x in entry_order if x)
+            # Positions that could be open after the next fills. A pending SALE still counts as open: its
+            # market might be shut tomorrow (a holiday) while the new buy fills, which would briefly make 6
+            # positions (found by the session-4 risk review). Waiting a day for the sale to fill is safer.
+            n_open = sum(held) + sum(1 for x in entry_order if x)
             if not breaker.allows_new_trades or n_open >= config.MAX_OPEN_POSITIONS:
                 if not blocked[a]:
                     blocked[a] = True
@@ -324,8 +326,9 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
             if open_values:
                 log.max_position_weight = max(log.max_position_weight, max(open_values) / equity)
             log.days_over_cap += sum(1 for a in range(k) if over_cap(a, j, equity))
-            for a in range(k):  # the 22% alert: a position ended the day well above the 20% limit
-                if held[a] and ok[j, a] and value[a] > config.POSITION_ALERT_WEIGHT * equity:
+            for a in range(k):  # the 22% alert: a position ended the day well above the 20% limit. Checked even
+                # when the asset's own market is shut: its share can still grow if the rest of the account falls.
+                if held[a] and value[a] > config.POSITION_ALERT_WEIGHT * equity:
                     log.alerts.append({"date": dates[j], "asset": assets[a], "weight": value[a] / equity})
         equity_hist.append(equity)
         weight_hist.append([v / equity for v in value])
@@ -352,7 +355,7 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
         returns = returns.iloc[first:]
         returns.iloc[0] = equity.iloc[0] - 1
     return PortfolioResult(equity, returns, weights.sum(axis=1), trade_df, cost_multiplier,
-                           pd.Series(cash_r[first:], index=equity.index), log, weights)
+                           pd.Series(cash_r[first:], index=equity.index), risk=log, weights=weights)
 
 
 def portfolio_lookahead_check(strategy, prices: dict, cash_rate, assets: list, n_cuts: int = 4,

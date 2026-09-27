@@ -31,6 +31,9 @@ The rules (kept deliberately simple so a beginner can argue with them):
   4 Sensitivity  On training data, the neighbouring parameter settings must have a median
                  Sharpe of at least 70% of the chosen setting's, and none may lose money.
   5 Sample size  At least 30 trades over the whole period, else NEEDS MORE DATA.
+                 Strategies that are always partly invested (sample_size_rule = "rebalances", e.g. vol_target)
+                 use their pre-registered rule instead: at least 30 "active rebalances" (weight changes of 5
+                 percentage points or more) AND at least 5 years of test period.
   6 Drawdown     The worst fall must be no deeper than buy-and-hold's worst fall.
   7 Regimes      In 2008, 2020 and 2022 the strategy must not be worse than buy-and-hold
                  on BOTH return and drawdown at the same time.
@@ -90,6 +93,7 @@ class Subject:
     sensitivity: Callable       # (train_start, train_end) -> (grid, (row param, col param), chosen)
     run_same_close: Callable = None  # (start, end): the strategy with the OLD same-close timing, for
                                      # the report's "Timing cost" table only. Never used to judge.
+    sample_size_rule: str = "trades"  # "trades" (round trips) or "rebalances" (always-partly-invested strategies)
 
 
 @dataclass
@@ -107,6 +111,7 @@ class AssetEvaluation:
     timing: pd.DataFrame = None   # key metrics under same-close vs next-close execution
     mix_weight: float = 1.0       # share of the account in the asset(s) for the same-risk mix
     benchmark_name: str = "buy-and-hold"
+    sample_size_rule: str = "trades"
     checks: list = field(default_factory=list)
     verdict: str = ""
     reason: str = ""
@@ -235,6 +240,7 @@ def evaluate(strategy, prices: pd.DataFrame, index_prices: pd.DataFrame, ticker:
         lookahead=lambda: full_lookahead_check(strategy, prices, execution),
         sensitivity=lambda s, e: sensitivity_grid(strategy, lambda v: run_variant(v, s, e)),
         run_same_close=lambda s, e: run_backtest(prices, signal, 1.0, s, e, cash_rate, "same_close"),
+        sample_size_rule=getattr(strategy, "sample_size_rule", "trades"),
     )
     return evaluate_subject(subject, is_demo)
 
@@ -268,7 +274,8 @@ def evaluate_subject(subject: Subject, is_demo: bool = False) -> AssetEvaluation
     timing = timing_table(subject, periods, results)
 
     ev = AssetEvaluation(subject.ticker, subject.label, is_demo, periods, results, metrics,
-                         sens, params, chosen, regimes, timing, weight, subject.benchmark_name)
+                         sens, params, chosen, regimes, timing, weight, subject.benchmark_name,
+                         subject.sample_size_rule)
     ev.checks = run_checks(subject, ev)
     ev.verdict, ev.reason = verdict(ev.checks, is_demo)
     return ev
@@ -406,14 +413,17 @@ def run_checks(subject: Subject, ev: AssetEvaluation) -> list[Check]:
                         "the chosen setting is a lone 'magic number'"))
 
     # 5. Sample size
-    n_full = int(m.loc[("full", "strategy"), "n_trades"])
-    n_test = int(m.loc[("test", "strategy"), "n_trades"])
-    ok = n_full >= config.MIN_TRADES
-    checks.append(Check(5, "Sample size", PASS if ok else NMD,
-        f"{n_full} trades in total ({n_test} in the test period). " +
-        ("Enough to say something." if ok else
-         f"Fewer than {config.MIN_TRADES}: too few to tell skill from luck."),
-        f"only {n_full} trades"))
+    if ev.sample_size_rule == "rebalances":
+        checks.append(rebalance_sample_check(ev))
+    else:
+        n_full = int(m.loc[("full", "strategy"), "n_trades"])
+        n_test = int(m.loc[("test", "strategy"), "n_trades"])
+        ok = n_full >= config.MIN_TRADES
+        checks.append(Check(5, "Sample size", PASS if ok else NMD,
+            f"{n_full} trades in total ({n_test} in the test period). " +
+            ("Enough to say something." if ok else
+             f"Fewer than {config.MIN_TRADES}: too few to tell skill from luck."),
+            f"only {n_full} trades"))
 
     # 6. Drawdown
     sd = max_drawdown_info(ev.results[("full", "strategy")].equity)
@@ -441,6 +451,30 @@ def run_checks(subject: Subject, ev: AssetEvaluation) -> list[Check]:
     # 8. Consistency (a warning, never a fail)
     checks.append(consistency_check(tr, te))
     return checks
+
+
+def rebalance_sample_check(ev: AssetEvaluation) -> Check:
+    """
+    Check 5 for always-partly-invested strategies (pre-registered in strategies/specs/vol_target.md, section 7):
+    count "active rebalances" (weight changes of at least 5 percentage points) instead of round-trip trades,
+    and require a test period of at least 5 years.
+    """
+    step = config.ACTIVE_REBALANCE_MIN_CHANGE
+    full, test = ev.results[("full", "strategy")], ev.results[("test", "strategy")]
+    n_full, n_test = full.rebalances(step), test.rebalances(step)
+    all_full = full.rebalances()
+    s, e = ev.periods["test"]
+    years = (pd.Timestamp(e) - pd.Timestamp(s)).days / 365.25
+    ok = n_full >= config.MIN_ACTIVE_REBALANCES and years >= config.MIN_TEST_YEARS
+    finding = (f"This strategy is always partly invested, so it is judged by its pre-registered rule, not by "
+               f"round trips: {n_full} active rebalances (weight changes of {step * 100:.0f} percentage points or more) in total, "
+               f"{n_test} of them in the test period (out of {all_full} rebalances of any size), and "
+               f"{years:.1f} years of test period. Needs at least {config.MIN_ACTIVE_REBALANCES} and "
+               f"{config.MIN_TEST_YEARS} years. " +
+               ("Enough to say something." if ok else "Too little evidence to tell skill from luck."))
+    return Check(5, "Sample size", PASS if ok else NMD, finding,
+                 f"only {n_full} active rebalances" if n_full < config.MIN_ACTIVE_REBALANCES
+                 else f"only {years:.1f} years of test period")
 
 
 def consistency_check(train_sharpe: float, test_sharpe: float) -> Check:
