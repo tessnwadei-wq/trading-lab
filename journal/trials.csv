@@ -6,3 +6,4 @@ first_logged,idea,asset,configurations,how_chosen,data
 2026-09-26,portfolio_ma_trend,Portfolio,1,fixed textbook values; risk settings not tuned,real
 2026-09-27,vol_target,SPY,1,"pre-registered values (spec strategies/specs/vol_target.md), no search",real
 2026-09-27,vol_target,XIU.TO,1,"pre-registered values (spec strategies/specs/vol_target.md), no search",real
+2026-09-28,ts_momentum,Portfolio,1,"pre-registered values (spec strategies/specs/ts_momentum.md), no search",real

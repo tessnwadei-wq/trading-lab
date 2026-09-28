@@ -4,8 +4,10 @@ Run the whole lab: load data, backtest each strategy, run the skeptic, write rep
 Usage:
     python run_lab.py                              # all strategies + portfolios, data from data/csv/
     python run_lab.py --strategy ma_trend          # one strategy
-    python run_lab.py --strategy portfolio_ma_trend  # just the multi-asset portfolio version
+    python run_lab.py --strategy portfolio_ma_trend  # just the multi-asset portfolio version of ma_trend
+    python run_lab.py --strategy ts_momentum       # the 4-asset time-series momentum portfolio (idea #5)
     python run_lab.py --refresh                    # re-download every ticker, overwrite data/csv/, then run
+    python run_lab.py --refresh IEF                # re-download only the tickers named (here IEF), then run
     python run_lab.py --demo                       # made-up practice data (when downloads fail)
     python run_lab.py --reason "why I'm running it"  # recorded with each look at the 2018+ test period
 
@@ -28,6 +30,7 @@ from lab.report import write_portfolio_report, write_report
 from lab.skeptic import evaluate, overall_verdict
 from strategies.ma_trend import MATrend
 from strategies.overfit_demo import OverfitDemo
+from strategies.ts_momentum import TSMomentum
 from strategies.vol_target import VolTarget
 
 # Register new strategies here.
@@ -36,15 +39,19 @@ STRATEGIES = {
     "overfit_demo": OverfitDemo,
     "vol_target": VolTarget,
 }
-PORTFOLIOS = {f"portfolio_{name}": name for name in config.PORTFOLIO_STRATEGIES}
+# Portfolio-only ideas (tested only as a multi-asset account, never asset by asset).
+PORTFOLIO_ONLY = {"ts_momentum": TSMomentum}
+# Run name -> strategy name. A single-asset idea's portfolio version is called "portfolio_<name>"; a portfolio-only
+# idea keeps its own name (its report is reports/<name>/report.md). Asset lists: config.PORTFOLIO_STRATEGIES.
+PORTFOLIOS = {(name if name in PORTFOLIO_ONLY else f"portfolio_{name}"): name for name in config.PORTFOLIO_STRATEGIES}
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Trading Lab: backtest + skeptic")
     ap.add_argument("--strategy", choices=list(STRATEGIES) + list(PORTFOLIOS), help="run only this one")
     ap.add_argument("--demo", action="store_true", help="use synthetic practice data")
-    ap.add_argument("--refresh", action="store_true",
-                    help="re-download every ticker and overwrite the files in data/csv/")
+    ap.add_argument("--refresh", nargs="*", metavar="TICKER", default=None,
+                    help="re-download and overwrite the files in data/csv/: every ticker, or only the ones named")
     ap.add_argument("--reason", default="",
                     help="why you're looking at the 2018+ test results (logged in journal/test_period_looks.csv)")
     args = ap.parse_args(argv)
@@ -53,9 +60,15 @@ def main(argv=None) -> int:
               '--reason "..." so the log says why.')
 
     tickers = config.TRADED_ASSETS + config.COMPARISON_ASSETS
-    print("Re-downloading prices into data/csv/..." if args.refresh else "Loading prices...")
+    # --refresh alone = every ticker (True); --refresh IEF = just those tickers; no --refresh = use the files.
+    refresh = False if args.refresh is None else (args.refresh or True)
+    unknown = [t for t in (args.refresh or []) if t not in tickers + [config.CASH_TICKER]]
+    if unknown:
+        print(f"Unknown ticker(s) for --refresh: {', '.join(unknown)}. Known: {', '.join(tickers + [config.CASH_TICKER])}")
+        return 2
+    print("Re-downloading prices into data/csv/..." if refresh else "Loading prices...")
     try:
-        prices, sources = load_all(tickers, demo=args.demo, refresh=args.refresh)
+        prices, sources = load_all(tickers, demo=args.demo, refresh=refresh)
     except DataUnavailable as exc:
         print(f"\nDATA PROBLEM\n{exc}")
         return 1
@@ -65,7 +78,8 @@ def main(argv=None) -> int:
 
     # Cash interest. Missing IRX data is not fatal: cash then earns 0%, with a loud warning.
     try:
-        irx, irx_source = load_prices(config.CASH_TICKER, demo=args.demo, refresh=args.refresh)
+        irx, irx_source = load_prices(config.CASH_TICKER, demo=args.demo,
+                                      refresh=refresh is True or config.CASH_TICKER in (args.refresh or []))
         print(f"  {'^IRX':7s} {len(irx):5d} days  {irx.index[0].date()} to {irx.index[-1].date()}  ({irx_source})")
     except DataUnavailable:
         irx, irx_source = None, "MISSING (cash earns 0%)"
@@ -107,14 +121,19 @@ def main(argv=None) -> int:
 
 
 def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
-    strategy = STRATEGIES[strategy_name]()
+    if strategy_name in PORTFOLIO_ONLY:
+        strategy = PORTFOLIO_ONLY[strategy_name](cash_rate=cash)   # ts_momentum compares each asset with cash
+    else:
+        strategy = STRATEGIES[strategy_name]()
     if not demo:
-        trials.log_trial(name, "Portfolio", 1, "fixed textbook values; risk settings not tuned")
-    ev = evaluate_portfolio(strategy, prices, cash, is_demo=demo)
+        trials.log_trial(name, "Portfolio", 1, getattr(strategy, "how_chosen",
+                                                       "fixed textbook values; risk settings not tuned"))
+    ev = evaluate_portfolio(strategy, prices, cash, is_demo=demo, assets=config.PORTFOLIO_STRATEGIES[strategy_name])
     print_evaluation("Portfolio", strategy.label(), ev)
     risk = ev.results[("full", "strategy")].risk
     print(f"      Risk rules: {risk.entries} entries, {risk.sized_by_risk_rule} sized by the 1% rule, "
-          f"{risk.sized_by_cap} capped at 20%, {risk.trims} trims, {risk.stop_exits} stop exits, "
+          f"{risk.sized_by_cap} capped at 20%, {risk.trims} trims, {risk.resizes} monthly resizes, "
+          f"{risk.stop_exits} stop exits, "
           f"circuit breaker triggered {len(risk.breaker_events)} times")
     if risk.alerts:
         print(f"      POSITION ALERT: a position ended the day above {config.POSITION_ALERT_WEIGHT:.0%} "
@@ -127,7 +146,7 @@ def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
         print(f"      FLAG FOR REVIEW: circuit breaker tripped {b['tripped'].date()} ({b['drawdown']:.1%} from peak)")
     if not demo:
         record_look(name, [ev], reason)
-    path = write_portfolio_report(strategy, ev, sources, cash_ok=cash is not None)
+    path = write_portfolio_report(strategy, ev, sources, cash_ok=cash is not None, name=name)
     print(f"  Overall: {ev.verdict}. Report: {path.relative_to(path.parents[2])}")
 
 
@@ -137,6 +156,10 @@ def record_look(idea, evaluations, reason):
     for ev in evaluations:
         m = ev.metrics.loc[("test", "strategy")]
         numbers += [ev.ticker, ev.strategy_label, m.sharpe, m.cagr, m.max_drawdown, m.n_trades]
+        # A new comparison shown against the 2018+ results is new test-period information, so it is part of the
+        # fingerprint too: adding the equal-risk mix (session 5) made every idea's next run a new look.
+        if ("test", "eqmix") in ev.metrics.index:
+            numbers += ["eqmix", ev.metrics.loc[("test", "eqmix"), "cagr"]]
     new = trials.log_look(idea, reason or "not given (run without --reason)", trials.results_fingerprint(numbers))
     n = len(trials.looks_for(idea))
     print(f"  Test-period look #{n} for {idea} logged." if new else

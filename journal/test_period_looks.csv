@@ -11,3 +11,9 @@ date,idea,reason,logged_by,fingerprint
 2026-09-26,portfolio_ma_trend,Session 3: re-run of every strategy after the trade-timing fix (next-close execution); no parameters changed,run_lab.py,4dfcb3baf1
 2026-09-26,portfolio_ma_trend,"Session 4 Part A: risk-rule changes (one-day buffer on the 1% rule, 22% position alert); no strategy parameters changed",run_lab.py,b008e0cbb9
 2026-09-27,vol_target,vol_target pre-registered test,run_lab.py,f1f432186d
+2026-09-28,ma_trend,"new check 3 comparison, no strategy changes",run_lab.py,6845d044a4
+2026-09-28,overfit_demo,"new check 3 comparison, no strategy changes",run_lab.py,8bfe6ecafa
+2026-09-28,vol_target,"new check 3 comparison, no strategy changes",run_lab.py,bebe5d2008
+2026-09-28,portfolio_ma_trend,"new check 3 comparison, no strategy changes",run_lab.py,3322336c04
+2026-09-28,ts_momentum,ts_momentum pre-registered test,run_lab.py,1bcc087d7a
+2026-09-28,ts_momentum,engine bug fix from the session-5 risk review (resize sizing ignored same-day costs); no strategy changes,run_lab.py,1e39f9c340

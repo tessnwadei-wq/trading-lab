@@ -28,6 +28,13 @@ How a day works, in plain English:
        * the 20% cap: 20% of the account.
      The order is "buy <size> of my account at the close", so it is worked out with the account
      value at the close it fills at, and it never fills above 20%.
+  5b. MONTHLY RESIZES (only for strategies with rebalance_days, e.g. ts_momentum; decided now, filled tomorrow).
+     On a strategy's rebalance day, every held asset whose signal is still "in" is resized to a freshly computed
+     size (the same 1%-rule / 20%-cap size as a new entry), buying or selling only the difference, and its stop is
+     reset below that fill price. This is what the fixed-weight control benchmark does too (it is traded back to
+     its weights every month), so the difference between them is the signal and the risk rules, not drift.
+     While the circuit breaker is on, a resize may only SELL (no top-ups). For the trade list and the 1% budget
+     check, each resize closes the old "segment" of the trade and starts a new one (reason "resize").
   6. TRIMS (decided now, filled tomorrow). The 20% rule as enforced: "No buy that would take a position
      above 20%. Anything above 20% at a close is trimmed to 18% at the next close." (Cutting back to
      exactly 20% would mean selling a sliver, and paying costs, almost every day.) Because the trim fills
@@ -46,7 +53,9 @@ far too loose for a calm one. Tying the distance to how much the asset normally 
 calm assets get bigger positions and jumpy assets smaller ones, so each trade risks about
 the same 1%. The stop is fixed at entry (it does not trail the price up).
 After a stop-out we wait for a FRESH signal (the signal must switch off and on again) before
-buying that asset again, otherwise we'd just buy back the next day.
+buying that asset again, otherwise we'd just buy back the next day. Strategies with monthly
+rebalance_days (ts_momentum) instead re-arm at the next rebalance day: a monthly signal can stay
+"in" for years, so waiting for it to switch off and on would leave the asset in cash that long.
 
 Simplifications (written down so nobody forgets them):
   * A stop is checked at the close, not during the day, and the sale fills at the NEXT close.
@@ -85,6 +94,8 @@ class RiskLog:
     blocked_by_max_positions: int = 0  # wanted to enter, but 5 positions were already open
     blocked_by_breaker: int = 0       # wanted to enter, but the circuit breaker was on
     trims: int = 0                    # a position grew past 20% and was cut back
+    resizes: int = 0                  # monthly resizes filled (strategies with rebalance_days only)
+    resizes_blocked_by_breaker: int = 0  # a top-up skipped because the circuit breaker was on
     stop_exits: int = 0
     signal_exits: int = 0
     max_open_positions: int = 0
@@ -105,6 +116,46 @@ class PortfolioResult(BacktestResult):
     weights: pd.DataFrame = None      # share of the account in each asset, each day
 
 
+def risk_sized_order(avg_move: float, rate: float, max_weight: float | None = None) -> tuple[dict, bool]:
+    """
+    The 1% rule and the 20% cap, as an order: ({"size", "distance", "loss_per_dollar"}, True if the 1% rule set
+    the size). Shared by the backtest engine and the paper account (lab/paper.py), so both size trades the same way.
+    avg_move = the asset's average daily move over the last 20 days; rate = the cost of one trade (0.15%).
+    """
+    max_weight = config.MAX_POSITION_WEIGHT if max_weight is None else max_weight
+    distance = config.STOP_ATR_MULTIPLE * avg_move            # e.g. 3 x 0.8% = 2.4%: where the stop goes
+    # One-day buffer: the stop-sale fills a close later, so size as if the stop were 2 more average
+    # daily moves away (e.g. 2 x 0.8% = 1.6%). The stop itself stays where it is.
+    buffer = config.STOP_FILL_BUFFER_MOVES * avg_move
+    # Loss per $1 invested if the stop is hit: the price fall (stop + buffer), plus the cost to buy
+    # and to sell.
+    fall = distance + buffer                                  # e.g. 2.4% + 1.6% = 4.0%
+    loss_per_dollar = fall + rate + (1 - fall) * rate         # e.g. 4.0% + 0.15% + 0.14% = 4.3%
+    risk_size = config.MAX_RISK_PER_TRADE / loss_per_dollar  # 1% / 4.3% = 23% of the account
+    by_risk = risk_size < max_weight
+    return {"size": risk_size if by_risk else max_weight, "distance": distance, "loss_per_dollar": loss_per_dollar}, by_risk
+
+
+def same_day_trades(values: list, targets: list, equity: float, rate: float) -> list:
+    """
+    How much to buy (+) or sell (-) of several positions at ONE close so that each ends at exactly its target share of
+    the account AFTER all of that close's trading costs. Every trade's cost shrinks the whole account a little, so
+    sizing each trade on its own would leave the others slightly over target (the session-5 risk review found resizes
+    landing at 20.002%). Use for trades all in the same direction (all buys, or all sells).
+
+    With gap_i = target_i x equity - value_i and S = the sum of the targets, the costs make it a small set of linear
+    equations with an exact answer:  buys  delta_i = gap_i - target_i x rate x total,  total = sum(gap) / (1 + S x rate)
+                                     sells delta_i = gap_i + target_i x rate x total,  total = sum(gap) / (1 - S x rate)
+    """
+    gaps = [t * equity - v for t, v in zip(targets, values)]
+    s = sum(targets)
+    if all(g >= 0 for g in gaps):
+        total = sum(gaps) / (1 + s * rate)
+        return [g - t * rate * total for g, t in zip(gaps, targets)]
+    total = sum(gaps) / (1 - s * rate)
+    return [g + t * rate * total for g, t in zip(gaps, targets)]
+
+
 def _prepare(strategy, prices: dict, assets: list, cash_rate):
     """Line every asset up on one calendar. Signals and stop distances use each asset's own history."""
     raw = pd.DataFrame({a: prices[a]["Close"] for a in assets})
@@ -114,7 +165,13 @@ def _prepare(strategy, prices: dict, assets: list, cash_rate):
     signals = signals.reindex(closes.index).ffill().fillna(0.0)
     avg_move = pd.DataFrame({a: prices[a]["Close"].pct_change().abs().rolling(config.STOP_ATR_DAYS).mean()
                              for a in assets}).reindex(closes.index).ffill()
-    return closes, traded, signals, avg_move, align_cash(cash_rate, closes.index)
+    # Rebalance days (monthly strategies only), on each asset's own calendar. False everywhere for the others.
+    if hasattr(strategy, "rebalance_days"):
+        rebal = pd.DataFrame({a: strategy.rebalance_days(prices[a]) for a in assets}).reindex(closes.index)
+        rebal = rebal.fillna(False).astype(bool)
+    else:
+        rebal = pd.DataFrame(False, index=closes.index, columns=assets)
+    return closes, traded, signals, avg_move, rebal, align_cash(cash_rate, closes.index)
 
 
 def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = None, start=None, end=None,
@@ -134,7 +191,8 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
     assets = assets or config.PORTFOLIO_ASSETS
     lag = execution_lag(execution)          # 2 = next_close, 1 = same_close
     same_close = lag == 1
-    closes, traded, signals, avg_move, cash = _prepare(strategy, prices, assets, cash_rate)
+    closes, traded, signals, avg_move, rebal, cash = _prepare(strategy, prices, assets, cash_rate)
+    monthly = hasattr(strategy, "rebalance_days")   # resize every rebalance day; re-arm there after a stop
 
     # Include `lag` trading days before `start`: decide on the first, (next_close) fill on the second.
     idx = closes.index
@@ -143,6 +201,7 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
     dates = idx[i0:i1]
     px, ok, sig = closes.to_numpy()[i0:i1], traded.to_numpy()[i0:i1], signals.to_numpy()[i0:i1]
     move, cash_r = avg_move.to_numpy()[i0:i1], cash.to_numpy()[i0:i1]
+    rebal_day = rebal.to_numpy()[i0:i1]
 
     k = len(assets)
     rate = config.COST_PER_TRADE * cost_multiplier
@@ -159,6 +218,7 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
     exit_order = [None] * k               # "stop" or "signal"
     entry_order = [None] * k              # {"size", "distance", "loss_per_dollar"}
     trim_order = [False] * k
+    resize_order = [None] * k             # {"size", "distance", "loss_per_dollar"} (monthly strategies only)
     trades = []
     equity_hist, weight_hist = [], []
 
@@ -206,6 +266,38 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
         log.entries += 1
         return True
 
+    def sized_order(a, j):
+        return risk_sized_order(move[j, a], rate)
+
+    def resize(a, order, j, equity, delta):
+        """
+        Monthly resize of a held position to order["size"] of the account (at this close), paying costs only on
+        the difference, and reset its stop below today's price. For the trade list, the old segment is closed at
+        today's value (reason "resize") and a new one starts, so the 1% budget is checked from the new stop.
+        """
+        nonlocal cash_bal
+        # delta comes from same_day_trades: exactly order["size"] AFTER all of today's costs, never above 20%.
+        if delta > 0 and not breaker.allows_new_trades:
+            log.resizes_blocked_by_breaker += 1   # no top-ups while the breaker is on
+            return
+        t = open_trade[a]
+        trades.append({"asset": assets[a], "entry": t["entry"], "exit": dates[j],
+                       "return": (t["received"] + value[a]) / t["invested"] - 1, "days": j - t["i"], "closed": True,
+                       "reason": "resize", "risk": t["risk"],
+                       "loss_of_account": (t["received"] + value[a] - t["invested"]) / t["equity"]})
+        if delta > 0:
+            delta = min(delta, max(cash_bal, 0.0) / (1 + rate))
+            cash_bal -= delta * (1 + rate)
+            invested, received = value[a] + delta * (1 + rate), 0.0
+        else:
+            cash_bal += -delta * (1 - rate)
+            invested, received = value[a], -delta * (1 - rate)
+        value[a] += delta
+        stop[a] = px[j, a] * (1 - order["distance"])
+        open_trade[a] = {"entry": dates[j], "i": j, "invested": invested, "received": received, "equity": equity,
+                         "risk": value[a] / equity * order["loss_per_dollar"]}
+        log.resizes += 1
+
     def trim(a, j):
         """Sell x so that (value - x) / (equity - x * rate) = TRIM_BACK_TO."""
         equity = cash_bal + sum(value)
@@ -239,6 +331,19 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
             for a in filling:
                 buy(a, entry_order[a], j, equity, sizes_today)
                 entry_order[a] = None
+            # Resizes: sales first, then top-ups, each group sized together (see same_day_trades).
+            todo = [a for a in range(k) if resize_order[a] and ok[j, a] and held[a]]
+            for selling in (True, False):
+                equity = cash_bal + sum(value)
+                group = [a for a in todo if (resize_order[a]["size"] * equity < value[a]) == selling]
+                if group:
+                    deltas = same_day_trades([value[a] for a in group], [resize_order[a]["size"] for a in group],
+                                             equity, rate)
+                    for a, d in zip(group, deltas):
+                        resize(a, resize_order[a], j, equity, d)
+            for a in range(k):
+                if resize_order[a] and ok[j, a]:
+                    resize_order[a] = None
             for a in range(k):
                 if trim_order[a] and ok[j, a]:
                     if held[a]:
@@ -258,6 +363,8 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
         for a in range(k):
             if sig[j, a] != 1:
                 need_fresh[a] = blocked[a] = False
+            elif monthly and rebal_day[j, a] and ok[j, a]:
+                need_fresh[a] = False   # monthly strategies: a stopped-out asset may come back at the next month-end
 
         # 4. Circuit breaker (see lab/breaker.py), on today's account value.
         breaker.update(j, dates[j], cash_bal + sum(value))
@@ -281,25 +388,31 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
                     else:
                         log.blocked_by_max_positions += 1
                 continue
-            distance = config.STOP_ATR_MULTIPLE * move[j, a]        # e.g. 3 x 0.8% = 2.4%: where the stop goes
-            # One-day buffer: the stop-sale fills a close later, so size as if the stop were 2 more average
-            # daily moves away (e.g. 2 x 0.8% = 1.6%). The stop itself stays where it is.
-            buffer = config.STOP_FILL_BUFFER_MOVES * move[j, a]
-            # Loss per $1 invested if the stop is hit: the price fall (stop + buffer), plus the cost to buy
-            # and to sell.
-            fall = distance + buffer                                  # e.g. 2.4% + 1.6% = 4.0%
-            loss_per_dollar = fall + rate + (1 - fall) * rate         # e.g. 4.0% + 0.15% + 0.14% = 4.3%
-            risk_size = config.MAX_RISK_PER_TRADE / loss_per_dollar  # 1% / 4.3% = 23% of the account
-            if risk_size < config.MAX_POSITION_WEIGHT:
-                size, log.sized_by_risk_rule = risk_size, log.sized_by_risk_rule + 1
+            order, by_risk = sized_order(a, j)   # the 1% rule and the 20% cap (see sized_order)
+            if by_risk:
+                log.sized_by_risk_rule += 1
             else:
-                size, log.sized_by_cap = config.MAX_POSITION_WEIGHT, log.sized_by_cap + 1
-            order = {"size": size, "distance": distance, "loss_per_dollar": loss_per_dollar}
+                log.sized_by_cap += 1
+            size = order["size"]
             if not same_close:
                 entry_order[a] = order
                 blocked[a] = False
             elif buy(a, order, j, equity, size):  # (the old engine sized each buy on its own)
                 blocked[a] = False
+
+        # 5b. Monthly resizes (strategies with rebalance_days only): held, still "in", on a rebalance day.
+        if monthly:
+            equity = cash_bal + sum(value)
+            for a in range(k):
+                if (held[a] and ok[j, a] and rebal_day[j, a] and sig[j, a] == 1 and not exit_order[a]
+                        and not np.isnan(move[j, a]) and move[j, a] > 0):
+                    order, _ = sized_order(a, j)
+                    if same_close:
+                        resize(a, order, j, equity, same_day_trades([value[a]], [order["size"]], equity, rate)[0])
+                        equity = cash_bal + sum(value)
+                    else:
+                        resize_order[a] = order
+                        trim_order[a] = False   # the resize already brings it back within the cap
 
         # 6. Trims: no position may be more than 20% of the account. same_close trims at once (and
         #    repeats, because one trim's costs can nudge an already-checked position over 20%);
@@ -317,7 +430,7 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
                         trimmed = True
         else:
             for a in range(k):
-                if over_cap(a, j, equity) and not exit_order[a]:
+                if over_cap(a, j, equity) and not exit_order[a] and not resize_order[a]:
                     trim_order[a] = True
 
         log.max_open_positions = max(log.max_open_positions, sum(held))
@@ -428,6 +541,27 @@ def evaluate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
     def run(s, e, m=1.0, variant=None, ex=execution):
         return simulate_portfolio(variant or strategy, prices, cash_rate, s, e, m, assets, ex)
 
+    # A pre-registered FAIR CONTROL (ts_momentum): the same assets at a fixed weight each, always held, rebalanced
+    # monthly. It isolates what the strategy's signal adds. Compared on Sharpe in check 3.
+    control_w = getattr(strategy, "control_weight", None)
+    run_control, control_name = None, ""
+    if control_w is not None:
+        control = {a: control_w for a in assets}
+        run_control = lambda s, e, m=1.0: fixed_mix(closes, control, s, e, m, cash_rate, execution)  # noqa: E731
+        control_name = (f"the fair control ({control_w:.0%} in each asset, always held, "
+                        f"{1 - control_w * len(assets):.0%} cash)")
+
+    signals = {a: strategy.generate_signals(prices[a]) for a in assets}
+
+    def count_signal_changes(s, e):
+        """Signal flips (hold <-> cash) across all assets, on days inside [s, e] and after the portfolio can act."""
+        lo = max(pd.Timestamp(s), first_day)
+        total = 0
+        for sig in signals.values():
+            flips = sig.ne(sig.shift(1)) & sig.notna() & sig.shift(1).notna()
+            total += int(flips.loc[lo:pd.Timestamp(e)].sum())
+        return total
+
     subject = Subject(
         ticker="Portfolio", label=f"{strategy.label()} on {', '.join(assets)}", benchmark_name=BENCHMARK_NAME,
         first_day=first_day, last_day=closes.index[-1],
@@ -439,5 +573,9 @@ def evaluate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
         lookahead=lambda: portfolio_lookahead_check(strategy, prices, cash_rate, assets, execution=execution),
         sensitivity=lambda s, e: sensitivity_grid(strategy, lambda v: run(s, e, 1.0, v)),
         run_same_close=lambda s, e: run(s, e, 1.0, None, "same_close"),
+        sample_size_rule=getattr(strategy, "sample_size_rule", "trades"),
+        run_control=run_control, control_name=control_name,
+        count_signal_changes=count_signal_changes if getattr(strategy, "sample_size_rule", "") == "signal_changes"
+        else None,
     )
     return evaluate_subject(subject, is_demo)

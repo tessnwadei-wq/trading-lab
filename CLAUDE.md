@@ -25,7 +25,10 @@ His ideas go through the same Skeptic Checklist as everyone else's.
 1. Look-ahead bias: does any signal use data not available at the time of the trade?
 2. Out-of-sample: how does it perform on 2018+ data vs the training period?
 3. Beats the simple alternatives: after costs (normal AND double), does it beat buy-and-hold, the broad index,
-   and the same-risk mix (asset + cash at the strategy's volatility, sized on training data only)?
+   the same-risk mix (asset + cash at the strategy's volatility, sized on training data only) AND the equal-risk mix
+   (the same mix rescaled so its 2018+ volatility equals the strategy's 2018+ volatility; a judging yardstick, so using
+   test-period volatility is allowed)? Beating the mixes only by taking more risk is not a win: losing to the
+   equal-risk mix FAILs check 3.
 4. Parameter sensitivity: do nearby parameter values also work, or only one "magic" value?
 5. Sample size: how many trades? (Under 30 = not enough evidence.)
 6. Drawdown: what's the worst peak-to-trough loss, and how long did recovery take?
@@ -60,12 +63,17 @@ Sharpe ratios are measured on returns above the cash (T-bill) rate, and cash ear
 - `python run_lab.py` runs every strategy end to end and writes `reports/<strategy>/report.md`.
 - The data split, cost defaults and risk settings live in `lab/config.py`. Change them there, nowhere else.
 - Prices live in `data/csv/` and are committed. `python run_lab.py --refresh` re-downloads and overwrites them.
-- `lab/portfolio.py` runs a strategy on SPY, XIU.TO and GLD as one account with the risk rules enforced.
+- `lab/portfolio.py` runs a strategy on several assets as one account with the risk rules enforced. Each portfolio idea keeps
+  its own frozen asset list (`config.PORTFOLIO_STRATEGIES`): portfolio_ma_trend uses SPY, XIU.TO, GLD; ts_momentum adds IEF.
 - Every real-data test is counted in `journal/trials.csv` (the over-search counter). Never delete rows.
 - Every look at 2018+ results is logged in `journal/test_period_looks.csv` (`run_lab.py --reason` does it). Log looks
   made any other way by hand. Never delete rows.
 - Trades fill at the next day's close (`config.EXECUTION = "next_close"`). `execution="same_close"` exists only for the
   reports' "Timing cost" table; never use it to judge a strategy.
+- `paper_trade.py` (engine `lab/paper.py`) is the local paper account. It only allows `buy_and_hold`
+  of the 4-asset control mix until a strategy passes the full Skeptic Checklist, enforces every risk rule, refuses to
+  run if its files are missing, edited or don't match git, and commits only its own files. Tessy runs it by hand on her
+  PC; the tests use throwaway folders.
 - The circuit breaker lives in `lab/breaker.py`: a fixed review period in backtests, a manual logged reset
   (`reset_circuit_breaker.py`) in paper mode. Agents must never run, script or suggest automating
   `reset_circuit_breaker.py`. Only Tessy resets it.

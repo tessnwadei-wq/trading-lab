@@ -1,6 +1,6 @@
 # Strategy report: `portfolio_ma_trend`
 
-*Generated 2026-09-27 by `python run_lab.py`.*
+*Generated 2026-09-28 by `python run_lab.py`.*
 
 **Rule:** Hold the asset when price is above its 200-day moving average, otherwise hold cash. Run on SPY, XIU.TO, GLD at the same time as one account, with the CLAUDE.md risk rules enforced (see *Risk manager* below).
 
@@ -10,15 +10,15 @@
 
 | Tested on | Verdict | Why |
 |---|---|---|
-| Portfolio | **FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of equal-weight buy-and-hold at normal costs (Sharpe 0.71 vs 0.87, short by 0.16); the same-risk mix at normal costs (yearly return 6.1% vs 6.3%, short by 0.2 percentage points a year); equal-weight buy-and-hold at double costs (Sharpe 0.60 vs 0.87, short by 0.27); the broad index (SPY) at double costs (Sharpe 0.60 vs 0.68, short by 0.08); the same-risk mix at double costs (yearly return 5.5% vs 6.3%, short by 0.8 percentage points a year). |
+| Portfolio | **FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of equal-weight buy-and-hold at normal costs (Sharpe 0.71 vs 0.87, short by 0.16); the same-risk mix at normal costs (yearly return 6.1% vs 6.3%, short by 0.2 percentage points a year); the equal-risk mix at normal costs (yearly return 6.1% vs 7.0%, short by 0.9 percentage points a year); equal-weight buy-and-hold at double costs (Sharpe 0.60 vs 0.87, short by 0.27); the broad index (SPY) at double costs (Sharpe 0.60 vs 0.68, short by 0.08); the same-risk mix at double costs (yearly return 5.5% vs 6.3%, short by 0.8 percentage points a year); the equal-risk mix at double costs (yearly return 5.5% vs 6.9%, short by 1.4 percentage points a year). |
 
-**Test-period (2018+) looks for this idea: 5** (this report included; details in *Test-period looks* below).
+**Test-period (2018+) looks for this idea: 6** (this report included; details in *Test-period looks* below).
 
 **Ground rules applied:** costs of 0.10% commission + 0.05% slippage on every buy and every sell; each decision is made from a day's closing price and **traded at the next day's close** (so gains and losses start the day after that); parameters chosen on 2005-2017 only; 2018+ used once as the out-of-sample test. Money in cash earns the 13-week US T-bill rate (^IRX), used for every asset including XIU.TO (a simplification), and Sharpe ratios measure return *above* that cash rate.
 
-**Data sources:** SPY: data/csv/SPY.csv; XIU.TO: data/csv/XIU_TO.csv; GLD: data/csv/GLD.csv; CAD=X: data/csv/CAD_X.csv; ^IRX: data/csv/IRX.csv
+**Data sources:** SPY: data/csv/SPY.csv; XIU.TO: data/csv/XIU_TO.csv; GLD: data/csv/GLD.csv; IEF: data/csv/IEF.csv; CAD=X: data/csv/CAD_X.csv; ^IRX: data/csv/IRX.csv
 
-**Compared with:** equal-weight buy-and-hold of SPY/XIU.TO/GLD (1/3 each, rebalanced monthly), the broad index (SPY), and a same-risk mix of that equal-weight basket plus cash. **Simplification:** XIU.TO is in Canadian dollars and its returns are added as if in the same currency (currency moves are ignored).
+**Compared with:** equal-weight buy-and-hold of SPY/XIU.TO/GLD (1/3 each, rebalanced monthly), the broad index (SPY), a same-risk mix of that equal-weight basket plus cash, and the equal-risk mix (the same mix at the strategy's 2018+ volatility). **Simplification:** XIU.TO is in Canadian dollars and its returns are added as if in the same currency (currency moves are ignored).
 
 ## Risk manager
 
@@ -52,15 +52,15 @@ The portfolio enforces the CLAUDE.md risk rules in code (`lab/portfolio.py`). Nu
 |---|---|---|---|
 | 1 | Look-ahead bias | ✅ PASS | Each asset's signals, and the whole portfolio's daily value, stayed identical when the future was hidden (6 cut-off dates per asset, 4 for the portfolio). Trades happen at the close after the decision: changing a decision day's closing price never changed what the portfolio held after that close (9 asset-days tested). |
 | 2 | Out-of-sample | ✅ PASS | Sharpe was 0.37 in training (2005-2017) and 0.71 in the 2018+ test. The edge roughly held up on unseen data. |
-| 3 | Beats the simple alternatives | ❌ FAIL | Beat the broad index (SPY) at normal costs (Sharpe 0.71 vs 0.68). But fell short of equal-weight buy-and-hold at normal costs (Sharpe 0.71 vs 0.87, short by 0.16); the same-risk mix at normal costs (yearly return 6.1% vs 6.3%, short by 0.2 percentage points a year); equal-weight buy-and-hold at double costs (Sharpe 0.60 vs 0.87, short by 0.27); the broad index (SPY) at double costs (Sharpe 0.60 vs 0.68, short by 0.08); the same-risk mix at double costs (yearly return 5.5% vs 6.3%, short by 0.8 percentage points a year). (Same-risk mix = 31% in the assets + 69% in cash, sized on 2005-2017 data.) |
+| 3 | Beats the simple alternatives | ❌ FAIL | Beat the broad index (SPY) at normal costs (Sharpe 0.71 vs 0.68). But fell short of equal-weight buy-and-hold at normal costs (Sharpe 0.71 vs 0.87, short by 0.16); the same-risk mix at normal costs (yearly return 6.1% vs 6.3%, short by 0.2 percentage points a year); the equal-risk mix at normal costs (yearly return 6.1% vs 7.0%, short by 0.9 percentage points a year); equal-weight buy-and-hold at double costs (Sharpe 0.60 vs 0.87, short by 0.27); the broad index (SPY) at double costs (Sharpe 0.60 vs 0.68, short by 0.08); the same-risk mix at double costs (yearly return 5.5% vs 6.3%, short by 0.8 percentage points a year); the equal-risk mix at double costs (yearly return 5.5% vs 6.9%, short by 1.4 percentage points a year). (Same-risk mix = 31% in the assets + 69% in cash, sized on 2005-2017 data. Equal-risk mix = 37% in the assets + 63% in cash, the same mix rescaled so its 2018+ volatility matches the strategy's 2018+ volatility.) |
 | 4 | Parameter sensitivity | ✅ PASS | Chosen setting's training Sharpe 0.37; its 5 neighbours: median 0.52, worst 0.43. Nearby settings work too, so it isn't a single magic number. |
 | 5 | Sample size | ✅ PASS | 233 trades in total (88 in the test period). Enough to say something. |
 | 6 | Drawdown | ✅ PASS | Worst fall -7.9% (trough 2016-02-04, took 407 trading days to recover) vs equal-weight buy-and-hold -38.0%. Shallower than just holding. |
 | 7 | Regime check | ✅ PASS | Strategy vs equal-weight buy-and-hold: 2008 financial crisis: -2.6% vs -22.2%; 2020 COVID crash year: +4.6% vs +16.4%; 2022 rate-hike bear market: -6.1% vs -8.5%. No stress period where it was worse on both return and drawdown. |
 | 8 | Consistency | ✅ PASS | Sharpe went from 0.37 (training) to 0.71 (test), a change of +0.34, within the ±0.4 expected from normal ups and downs. Behaviour was steady. |
-| 9 | **Verdict** | **❌ FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of equal-weight buy-and-hold at normal costs (Sharpe 0.71 vs 0.87, short by 0.16); the same-risk mix at normal costs (yearly return 6.1% vs 6.3%, short by 0.2 percentage points a year); equal-weight buy-and-hold at double costs (Sharpe 0.60 vs 0.87, short by 0.27); the broad index (SPY) at double costs (Sharpe 0.60 vs 0.68, short by 0.08); the same-risk mix at double costs (yearly return 5.5% vs 6.3%, short by 0.8 percentage points a year). |
+| 9 | **Verdict** | **❌ FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of equal-weight buy-and-hold at normal costs (Sharpe 0.71 vs 0.87, short by 0.16); the same-risk mix at normal costs (yearly return 6.1% vs 6.3%, short by 0.2 percentage points a year); the equal-risk mix at normal costs (yearly return 6.1% vs 7.0%, short by 0.9 percentage points a year); equal-weight buy-and-hold at double costs (Sharpe 0.60 vs 0.87, short by 0.27); the broad index (SPY) at double costs (Sharpe 0.60 vs 0.68, short by 0.08); the same-risk mix at double costs (yearly return 5.5% vs 6.3%, short by 0.8 percentage points a year); the equal-risk mix at double costs (yearly return 5.5% vs 6.9%, short by 1.4 percentage points a year). |
 
-**Same-risk mix:** 31% in the assets (equal weights) and 69% in cash earning interest, rebalanced monthly. 31% was chosen so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. In the test period its volatility was 3.9% vs the strategy's 4.7%. If the strategy can't earn more than this simple mix, it is just a complicated way of owning less of the asset.
+**Same-risk mix:** 31% in the assets (equal weights) and 69% in cash earning interest, rebalanced monthly. 31% was chosen so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. In the test period its volatility was 3.9% vs the strategy's 4.7%. If the strategy can't earn more than this simple mix, it is just a complicated way of owning less of the asset. Because the two can end up with different bumpiness in 2018+, check 3 also uses the **equal-risk mix** (below).
 
 ### Head to head: strategy vs the same-risk mix
 
@@ -76,6 +76,17 @@ The same-risk mix is 31% in the assets + 69% cash, rebalanced monthly, sized on 
 | Full period | double | 3.4% | 4.6% | -1.22 | 4.4% | 4.1% | -9.2% | -12.9% |
 
 **Answer (test period, 2018+):** the strategy did **not** earn more than simply owning less of the asset (normal costs -0.20% a year, double costs -0.78% a year). **But** in the test period the strategy was bumpier than the mix (volatility 4.7% vs 3.9%), so part of any extra return is simply pay for extra risk. Per unit of risk (Sharpe) it scored 0.71 vs the mix's 0.88.
+
+### Head to head: strategy vs the equal-risk mix (2018+)
+
+The equal-risk mix is the same mix rescaled so that **in 2018+** it was exactly as bumpy as the strategy was in 2018+: 37% in the assets + 63% cash. Using test-period volatility is allowed here because this is a yardstick for judging, not a strategy decision. If the strategy can't earn more than this, any win over the same-risk mix came from taking more risk, not from skill.
+
+| Costs | Strategy CAGR | Equal-risk mix CAGR | Difference (points a year) | Strategy volatility | Equal-risk mix volatility | Strategy Sharpe | Equal-risk mix Sharpe |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| normal | 6.1% | 7.0% | **-0.85** | 4.7% | 4.7% | 0.71 | 0.88 |
+| double | 5.5% | 6.9% | **-1.43** | 4.6% | 4.7% | 0.60 | 0.87 |
+
+**Answer:** at the same risk, the strategy did **not** earn more than simply owning less of the asset. Check 3 fails.
 
 ### Equity curve
 
@@ -99,6 +110,7 @@ The same-risk mix is 31% in the assets + 69% cash, rebalanced monthly, sized on 
 | Test 2018+ | Equal-weight buy-and-hold | 14.3% | 0.87 | -24.8% | 12.9% | 1 | - | 100% |
 | Test 2018+ | Broad index (SPY) | 14.6% | 0.68 | -33.7% | 19.0% | 1 | - | 100% |
 | Test 2018+ | Same-risk mix (31% in, 69% cash) | 6.3% | 0.88 | -7.9% | 3.9% | 1 | - | 31% |
+| Test 2018+ | Equal-risk mix (37% in, 63% cash) | 7.0% | 0.88 | -9.3% | 4.7% | 1 | - | 37% |
 | Full period | Strategy | 4.1% | 0.51 | -7.9% | 4.5% | 233 | 32% | 39% |
 | Full period | Strategy (double costs) | 3.4% | 0.38 | -9.2% | 4.4% | 233 | 26% | 39% |
 | Full period | Equal-weight buy-and-hold | 10.9% | 0.70 | -38.0% | 13.5% | 1 | - | 100% |
@@ -140,7 +152,7 @@ The lab decides at a day's close and trades at the **next** day's close. Before 
 
 The more things you try, the more likely your best result is luck. The lab counts every parameter combination and idea ever tested on real data in [`journal/trials.csv`](../../journal/trials.csv).
 
-**Lab-wide so far:** 4 ideas, 3,845 parameter combinations tested.
+**Lab-wide so far:** 5 ideas, 3,846 parameter combinations tested.
 
 | Tested on | Tries for this idea | Training Sharpe | Luck bar (this idea) | Rough chance it's real | Luck bar (whole lab) |
 |---|---:|---:|---:|---:|---:|
@@ -151,7 +163,7 @@ The more things you try, the more likely your best result is luck. The lab count
 
 ## Test-period looks
 
-The 2018+ test period should be looked at **once** per idea. This idea's test results have been seen **5 times** (every look is logged in [`journal/test_period_looks.csv`](../../journal/test_period_looks.csv); re-running with nothing changed isn't a new look).
+The 2018+ test period should be looked at **once** per idea. This idea's test results have been seen **6 times** (every look is logged in [`journal/test_period_looks.csv`](../../journal/test_period_looks.csv); re-running with nothing changed isn't a new look).
 
 | # | Date | Why |
 |---:|---|---|
@@ -160,6 +172,7 @@ The 2018+ test period should be looked at **once** per idea. This idea's test re
 | 3 | 2026-09-26 | Session 2 look 3 of 3: final run (journal honesty note) |
 | 4 | 2026-09-26 | Session 3: re-run of every strategy after the trade-timing fix (next-close execution); no parameters changed |
 | 5 | 2026-09-26 | Session 4 Part A: risk-rule changes (one-day buffer on the 1% rule, 22% position alert); no strategy parameters changed |
+| 6 | 2026-09-28 | new check 3 comparison, no strategy changes |
 
 **Why this matters:** each extra look weakens the test a little. None of these looks was used to choose parameters, but a result seen several times is no longer a completely fresh test. A strategy that is changed *because* of what a look showed must be treated as a new idea.
 

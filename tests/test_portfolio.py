@@ -336,3 +336,14 @@ def test_alert_fires_even_on_a_day_the_asset_market_is_shut():
     frames["A"] = frames["A"].drop(holiday)
     res = run(frames)
     assert any(al["date"] == holiday and al["asset"] == "A" for al in res.risk.alerts)
+
+
+def test_same_day_trades_land_exactly_on_target_after_all_costs():
+    """Session-5 risk review: sized one by one, same-day top-ups ended slightly above 20%."""
+    from lab.portfolio import same_day_trades
+    rate, equity = config.COST_PER_TRADE, 100.0
+    for values, targets in (([17.0, 19.5, 12.0], [0.2, 0.2, 0.2]), ([23.0, 21.0], [0.2, 0.18])):
+        deltas = same_day_trades(values, targets, equity, rate)
+        after = equity - rate * sum(abs(d) for d in deltas)
+        for v, d, t in zip(values, deltas, targets):
+            assert (v + d) / after == pytest.approx(t, abs=1e-12)

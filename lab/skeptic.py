@@ -25,15 +25,26 @@ The rules (kept deliberately simple so a beginner can argue with them):
                    * buy-and-hold of the same asset  (compared on Sharpe ratio)
                    * the broad index, SPY            (compared on Sharpe ratio)
                    * the same-risk mix               (compared on yearly return, CAGR)
-                 Why CAGR for the mix: the mix is built to be exactly as bumpy as the strategy, so
-                 at equal risk the fair question is simply "who earned more?". (Its Sharpe is almost
-                 identical to buy-and-hold's, so a Sharpe comparison would just repeat that test.)
+                   * the equal-risk mix              (compared on yearly return, CAGR)
+                 Why CAGR for the mixes: a mix is built to be as bumpy as the strategy, so at equal
+                 risk the fair question is simply "who earned more?". (Its Sharpe is almost identical
+                 to buy-and-hold's, so a Sharpe comparison would just repeat that test.)
+                 The same-risk mix is sized on TRAINING data, so in the test period the strategy can
+                 end up bumpier than it and "win" just by taking more risk (vol_target did this). The
+                 equal-risk mix (session 5) closes that loophole: the same mix, rescaled so that its
+                 TEST-period volatility equals the strategy's TEST-period volatility. This is allowed
+                 to use test-period data because it is a yardstick for judging, never a strategy
+                 decision: nothing about the strategy changes. Losing to it = FAIL.
+                 Some ideas also pre-register a FAIR CONTROL (e.g. ts_momentum: the same four assets at 20%
+                 each, always held). It is compared on Sharpe and must be beaten too.
   4 Sensitivity  On training data, the neighbouring parameter settings must have a median
                  Sharpe of at least 70% of the chosen setting's, and none may lose money.
   5 Sample size  At least 30 trades over the whole period, else NEEDS MORE DATA.
                  Strategies that are always partly invested (sample_size_rule = "rebalances", e.g. vol_target)
                  use their pre-registered rule instead: at least 30 "active rebalances" (weight changes of 5
-                 percentage points or more) AND at least 5 years of test period.
+                 percentage points or more) AND at least 5 years of test period. Monthly signal strategies
+                 (sample_size_rule = "signal_changes", e.g. ts_momentum) need at least 30 month-end signal
+                 flips across all assets AND at least 5 years of test period.
   6 Drawdown     The worst fall must be no deeper than buy-and-hold's worst fall.
   7 Regimes      In 2008, 2020 and 2022 the strategy must not be worse than buy-and-hold
                  on BOTH return and drawdown at the same time.
@@ -63,6 +74,7 @@ PASS, WARN, FAIL, NMD = "PASS", "WARN", "FAIL", "NEEDS MORE DATA"
 
 # Who is compared with whom. "_2x" = the same thing with double trading costs.
 WHO = ["strategy", "strategy_2x", "buy_hold", "buy_hold_2x", "index", "index_2x", "mix", "mix_2x"]
+# Plus, in the test period only: "eqmix" and "eqmix_2x", the equal-risk mix (see equal_risk_weight).
 
 
 @dataclass
@@ -93,7 +105,11 @@ class Subject:
     sensitivity: Callable       # (train_start, train_end) -> (grid, (row param, col param), chosen)
     run_same_close: Callable = None  # (start, end): the strategy with the OLD same-close timing, for
                                      # the report's "Timing cost" table only. Never used to judge.
-    sample_size_rule: str = "trades"  # "trades" (round trips) or "rebalances" (always-partly-invested strategies)
+    sample_size_rule: str = "trades"  # "trades" (round trips), "rebalances" (always-partly-invested strategies)
+                                      # or "signal_changes" (monthly signal strategies, e.g. ts_momentum)
+    run_control: Callable = None      # (start, end, cost_multiplier): a pre-registered fair control benchmark, if any
+    control_name: str = ""            # e.g. "the fair control (20% in each asset, always held)"
+    count_signal_changes: Callable = None  # (start, end) -> number of signal flips (for "signal_changes")
 
 
 @dataclass
@@ -110,8 +126,11 @@ class AssetEvaluation:
     regimes: pd.DataFrame
     timing: pd.DataFrame = None   # key metrics under same-close vs next-close execution
     mix_weight: float = 1.0       # share of the account in the asset(s) for the same-risk mix
+    eq_mix_weight: float = 1.0    # the same for the equal-risk mix (test period only)
     benchmark_name: str = "buy-and-hold"
     sample_size_rule: str = "trades"
+    control_name: str = ""        # set when the idea has a pre-registered fair control ("control" in results)
+    signal_changes: dict = None   # {"train", "test", "full"}: signal flips (sample_size_rule "signal_changes")
     checks: list = field(default_factory=list)
     verdict: str = ""
     reason: str = ""
@@ -214,6 +233,23 @@ def same_risk_weight(strategy_train: BacktestResult, benchmark_train: BacktestRe
     return float(np.clip(volatility(strategy_train.returns) / bench_vol, 0.0, 1.0))
 
 
+def equal_risk_weight(mix_weight: float, strategy_test: BacktestResult, mix_test: BacktestResult) -> float:
+    """
+    X for the EQUAL-RISK mix: the same-risk mix rescaled so that, in the TEST period, it is exactly as bumpy
+    as the strategy was in the test period. Mixing an asset with cash scales volatility in proportion to the
+    share invested, so if the strategy was 10% bumpier than the mix, the equal-risk mix holds 10% more.
+
+    Using test-period data is allowed here: this is a yardstick for JUDGING the result, not a strategy
+    decision (nothing about the strategy changes). It stops a strategy "winning" by simply taking more risk
+    than a mix that was sized on training data. Capped at 100% (no borrowing), so a strategy that is bumpier
+    than the asset itself is compared with 100% of the asset.
+    """
+    mix_vol = volatility(mix_test.returns)
+    if mix_vol <= 0 or mix_weight <= 0:
+        return float(np.clip(mix_weight, 0.0, 1.0))
+    return float(np.clip(mix_weight * volatility(strategy_test.returns) / mix_vol, 0.0, 1.0))
+
+
 # --------------------------------------------------------------------------------------
 # The main evaluation
 # --------------------------------------------------------------------------------------
@@ -259,12 +295,19 @@ def evaluate_subject(subject: Subject, is_demo: bool = False) -> AssetEvaluation
             results[(p, "strategy" + suffix)] = subject.run_strategy(s, e, mult)
             results[(p, "buy_hold" + suffix)] = subject.run_benchmark(s, e, mult)
             results[(p, "index" + suffix)] = subject.run_index(s, e, mult)
+            if subject.run_control is not None:
+                results[(p, "control" + suffix)] = subject.run_control(s, e, mult)
 
     # Same-risk mix: X chosen on training data, then used unchanged in every period.
     weight = same_risk_weight(results[("train", "strategy")], results[("train", "buy_hold")])
     for p, (s, e) in periods.items():
         results[(p, "mix")] = subject.run_mix(weight, s, e, 1.0)
         results[(p, "mix_2x")] = subject.run_mix(weight, s, e, 2.0)
+
+    # Equal-risk mix: the same mix, rescaled to the strategy's TEST-period volatility. Test period only.
+    eq_weight = equal_risk_weight(weight, results[("test", "strategy")], results[("test", "mix")])
+    results[("test", "eqmix")] = subject.run_mix(eq_weight, *periods["test"], 1.0)
+    results[("test", "eqmix_2x")] = subject.run_mix(eq_weight, *periods["test"], 2.0)
 
     rows = [{"period": p, "who": who, **summarize(res)} for (p, who), res in results.items()]
     metrics = pd.DataFrame(rows).set_index(["period", "who"])
@@ -274,8 +317,10 @@ def evaluate_subject(subject: Subject, is_demo: bool = False) -> AssetEvaluation
     timing = timing_table(subject, periods, results)
 
     ev = AssetEvaluation(subject.ticker, subject.label, is_demo, periods, results, metrics,
-                         sens, params, chosen, regimes, timing, weight, subject.benchmark_name,
-                         subject.sample_size_rule)
+                         sens, params, chosen, regimes, timing, weight, eq_weight, subject.benchmark_name,
+                         subject.sample_size_rule, subject.control_name)
+    if subject.count_signal_changes is not None:
+        ev.signal_changes = {p: subject.count_signal_changes(s, e) for p, (s, e) in periods.items()}
     ev.checks = run_checks(subject, ev)
     ev.verdict, ev.reason = verdict(ev.checks, is_demo)
     return ev
@@ -344,14 +389,18 @@ def _gap(a: float, b: float, pct: bool = False) -> str:
     return f"{abs(a - b):.2f}" if abs(a - b) >= 0.005 else f"{abs(a - b):.3f}"
 
 
-def alternatives_comparisons(m: pd.DataFrame, benchmark_name: str) -> list[dict]:
-    """The six comparisons behind check 3, in the test period."""
+def alternatives_comparisons(m: pd.DataFrame, benchmark_name: str, control_name: str = "") -> list[dict]:
+    """The comparisons behind check 3, in the test period (each at normal and at double costs)."""
     out = []
     for cost_label, sfx in (("normal costs", ""), ("double costs", "_2x")):
         strat = m.loc[("test", "strategy" + sfx)]
         for who, name, metric in (("buy_hold", benchmark_name, "sharpe"),
                                   ("index", "the broad index (SPY)", "sharpe"),
-                                  ("mix", "the same-risk mix", "cagr")):
+                                  ("mix", "the same-risk mix", "cagr"),
+                                  ("eqmix", "the equal-risk mix", "cagr"),
+                                  ("control", control_name or "the fair control", "sharpe")):
+            if ("test", who + sfx) not in m.index:
+                continue
             other = m.loc[("test", who + sfx)]
             a, b = float(strat[metric]), float(other[metric])
             out.append({"costs": cost_label, "name": name, "metric": metric,
@@ -391,7 +440,7 @@ def run_checks(subject: Subject, ev: AssetEvaluation) -> list[Check]:
         f"test Sharpe {te:.2f} vs training {tr:.2f}"))
 
     # 3. Beats the simple alternatives (test period, after costs)
-    comps = alternatives_comparisons(m, bench)
+    comps = alternatives_comparisons(m, bench, ev.control_name)
     won = [c for c in comps if c["won"]]
     lost = [c for c in comps if not c["won"]]
     parts = []
@@ -401,8 +450,12 @@ def run_checks(subject: Subject, ev: AssetEvaluation) -> list[Check]:
         parts.append(("But fell short of " if won else "Fell short of ") +
                      "; ".join(_describe(c, with_gap=True) for c in lost) + ".")
     x = ev.mix_weight
-    parts.append(f"(Same-risk mix = {x:.0%} {'in the assets' if subject.ticker == 'Portfolio' else 'in ' + subject.ticker}"
-                 f" + {1 - x:.0%} in cash, sized on 2005-2017 data.)")
+    where = 'in the assets' if subject.ticker == 'Portfolio' else 'in ' + subject.ticker
+    xe = ev.eq_mix_weight
+    parts.append(f"(Same-risk mix = {x:.0%} {where} + {1 - x:.0%} in cash, sized on 2005-2017 data. "
+                 f"Equal-risk mix = {xe:.0%} {where} + {1 - xe:.0%} in cash, the same mix rescaled so its 2018+ "
+                 f"volatility matches the strategy's 2018+ volatility"
+                 + (", capped at 100% because there's no borrowing" if xe >= 1.0 else "") + ".)")
     headline = ("it fell short of " + "; ".join(_describe(c, with_gap=True) for c in lost)) if lost else ""
     checks.append(Check(3, "Beats the simple alternatives", PASS if not lost else FAIL,
                         " ".join(parts), headline))
@@ -415,6 +468,8 @@ def run_checks(subject: Subject, ev: AssetEvaluation) -> list[Check]:
     # 5. Sample size
     if ev.sample_size_rule == "rebalances":
         checks.append(rebalance_sample_check(ev))
+    elif ev.sample_size_rule == "signal_changes":
+        checks.append(signal_change_sample_check(ev))
     else:
         n_full = int(m.loc[("full", "strategy"), "n_trades"])
         n_test = int(m.loc[("test", "strategy"), "n_trades"])
@@ -474,6 +529,25 @@ def rebalance_sample_check(ev: AssetEvaluation) -> Check:
                ("Enough to say something." if ok else "Too little evidence to tell skill from luck."))
     return Check(5, "Sample size", PASS if ok else NMD, finding,
                  f"only {n_full} active rebalances" if n_full < config.MIN_ACTIVE_REBALANCES
+                 else f"only {years:.1f} years of test period")
+
+
+def signal_change_sample_check(ev: AssetEvaluation) -> Check:
+    """
+    Check 5 for monthly signal strategies (pre-registered in strategies/specs/ts_momentum.md, section 7): count the
+    month-end decisions that flipped an asset between "hold" and "cash", across all assets, and require a test
+    period of at least 5 years. (Round trips would be muddied by monthly resizes and stop-outs.)
+    """
+    n_full, n_test = ev.signal_changes["full"], ev.signal_changes["test"]
+    s, e = ev.periods["test"]
+    years = (pd.Timestamp(e) - pd.Timestamp(s)).days / 365.25
+    ok = n_full >= config.MIN_TRADES and years >= config.MIN_TEST_YEARS
+    finding = (f"Judged by its pre-registered rule: {n_full} signal changes (month-end flips between hold and cash, "
+               f"all assets together) in total, {n_test} of them in the test period, and {years:.1f} years of test "
+               f"period. Needs at least {config.MIN_TRADES} and {config.MIN_TEST_YEARS} years. " +
+               ("Enough to say something." if ok else "Too little evidence to tell skill from luck."))
+    return Check(5, "Sample size", PASS if ok else NMD, finding,
+                 f"only {n_full} signal changes" if n_full < config.MIN_TRADES
                  else f"only {years:.1f} years of test period")
 
 
