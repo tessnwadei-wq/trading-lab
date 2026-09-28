@@ -10,11 +10,11 @@ A personal, rules-based **trading research lab** for learning. It tests trading 
 | Folder / file | What it is |
 |---|---|
 | `run_lab.py` | The one command you run. Loads prices, tests every strategy, writes reports. |
-| `data/csv/` | **The price files the lab uses** (SPY, XIU_TO, GLD, CAD_X and IRX), committed to git so everyone gets the same numbers. |
+| `data/csv/` | **The price files the lab uses** (SPY, XIU_TO, GLD, IEF, CAD_X and IRX), committed to git so everyone gets the same numbers. |
 | `lab/data.py` | Reads `data/csv/`; downloads a missing file (Yahoo Finance → Stooq) and re-downloads everything with `--refresh`. |
 | `lab/cash.py` | Interest on cash: the T-bill rate earned whenever a strategy is out of the market. |
 | `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs and cash interest. Decisions made at a day's close are traded at the **next** day's close. Holds any weight from 0% to 100% (fractional positions), with costs on each weight change. |
-| `lab/portfolio.py` | Phase 2: one strategy on several assets as one account, with the CLAUDE.md risk rules enforced. |
+| `lab/portfolio.py` | Phase 2: one strategy on several assets as one account, with the CLAUDE.md risk rules enforced. The universe is SPY, XIU.TO, GLD and IEF (bonds, added in session 5); each portfolio idea keeps the asset list it was tested with (`PORTFOLIO_STRATEGIES` in `lab/config.py`). |
 | `lab/breaker.py` | The drawdown circuit breaker. In a backtest it assumes a 21-trading-day review; in paper trading it waits for a manual reset. |
 | `reset_circuit_breaker.py` | The manual reset for paper trading (a later phase). **Human-only: only Tessy runs it; AI agents never do.** Needs `--who`, `--reason` and typing `RESET` (plus an extra step for the 20% hard floor). Every reset goes into an append-only log. |
 | `lab/metrics.py` | Scorecard numbers: yearly growth, worst fall, Sharpe ratio (above the cash rate), win rate, etc. |
@@ -86,6 +86,7 @@ Useful options:
 python run_lab.py --strategy ma_trend            # just one strategy
 python run_lab.py --strategy portfolio_ma_trend  # just the SPY + XIU.TO + GLD portfolio with risk rules
 python run_lab.py --refresh                      # re-download EVERY price file, then run
+python run_lab.py --refresh IEF                  # re-download just the files named (here IEF), then run
 python run_lab.py --demo                         # practice mode with made-up data
 python run_lab.py --reason "why I'm looking"     # recorded in journal/test_period_looks.csv
 ```
@@ -100,8 +101,10 @@ numbers and isn't counted twice. Commit that file along with the reports.
 rosier the results looked with the old "same close" timing.
 
 **Keeping the data current with `--refresh`.** A normal run always uses the files already in `data\csv\`,
-so without a refresh the data slowly goes stale. `--refresh` re-downloads every ticker (SPY, XIU.TO, GLD,
-CAD=X and the ^IRX cash rate) and **overwrites** its file in `data\csv\`, then runs the lab as usual. If a
+so without a refresh the data slowly goes stale. `--refresh` re-downloads every ticker (SPY, XIU.TO, GLD, IEF,
+CAD=X and the ^IRX cash rate) and **overwrites** its file in `data\csv\`, then runs the lab as usual. To re-download
+only some files, name them: `python run_lab.py --refresh IEF`. A download never saves **today's** row until 17:00
+New York time: before the close, Yahoo shows today's *latest* price, which isn't a closing price yet. If a
 download fails, the old file is kept and you see a `WARNING`. After a refresh, commit the updated
 `data\csv\` files (GitHub Desktop will list them as changed), so the reports and the files match.
 Refreshing adds new days, and Yahoo sometimes revises old ones slightly, so small changes in old results
@@ -121,6 +124,7 @@ A file in `data\csv\` is always used as-is (unless you pass `--refresh`).
 |---|---|---|
 | S&P 500 ETF | `data\csv\SPY.csv` | <https://stooq.com/q/d/l/?s=spy.us&i=d> (should download a CSV; if Stooq shows a message instead, use the Yahoo/Investing.com route in the last row) |
 | Gold ETF | `data\csv\GLD.csv` | <https://stooq.com/q/d/l/?s=gld.us&i=d> |
+| US 7-10 year Treasury bond ETF | `data\csv\IEF.csv` | <https://stooq.com/q/d/l/?s=ief.us&i=d> |
 | USD/CAD | `data\csv\CAD_X.csv` | <https://stooq.com/q/d/l/?s=usdcad&i=d> |
 | 13-week T-bill rate (cash interest) | `data\csv\IRX.csv` | Yahoo Finance: search **^IRX** → *Historical Data* → from 2005 → *Download*. |
 | TSX 60 ETF | `data\csv\XIU_TO.csv` | Yahoo Finance: search **XIU.TO** → *Historical Data* → set dates from 2005 → *Download*. If there's no download button, use Investing.com (free account): search "iShares S&P/TSX 60", *Historical Data*, *Daily*, *Download*. |

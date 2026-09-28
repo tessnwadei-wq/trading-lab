@@ -319,8 +319,9 @@ def markets_section(prices: dict) -> str:
     corr = daily.corr()["SPY"]
 
     lines = ["## How the markets differ", "",
-             "The lab will eventually trade more than stocks, so here is how four very different "
-             "markets behaved over the same years. Nothing here is traded yet.", "",
+             f"Here is how {len(closes.columns)} very different markets behaved over the same years. Stocks (SPY, "
+             "XIU.TO) are what the single-asset strategies trade; GLD and IEF are also in the multi-asset portfolios; "
+             "CAD=X is shown for comparison only.", "",
              "| Market | Average yearly return | Best year | Worst year | Worst drawdown | Moves with SPY (correlation) |",
              "|---|---:|---:|---:|---:|---:|"]
     for t in closes.columns:
@@ -345,6 +346,11 @@ def markets_section(prices: dict) -> str:
               "and fall together, so holding both diversifies less than it seems.",
               f"- **Gold** (GLD, correlation {corr['GLD']:+.2f}): largely goes its own way. It's a commodity with "
               "no earnings or dividends; people buy it as a store of value, often when they're worried.",
+              *([f"- **US government bonds** (IEF, correlation {corr['IEF']:+.2f}): a loan to the US government for "
+                 "7-10 years that pays interest. Bond prices move opposite to interest rates: when rates rise, older "
+                 "bonds paying less are worth less. In most stock crashes (2008, 2020) investors fled to safety, rates "
+                 "fell and IEF *rose*, so it often cushions a stock portfolio. But when inflation forces rates up fast "
+                 "(2022), stocks and bonds can fall together."] if "IEF" in corr else []),
               f"- **USD/CAD** (CAD=X, correlation {corr['CAD=X']:+.2f}): this is a *price of a currency*, not an "
               "investment that grows. When it goes UP, one US dollar buys more Canadian dollars (the CAD got "
               "weaker). It usually moves much less than stocks, which is why forex traders often use leverage "
@@ -672,7 +678,7 @@ def write_portfolio_report(strategy, ev: AssetEvaluation, sources: dict, cash_ok
     rule = (f"{strategy.description} Run on {', '.join(assets)} at the same time as one account, with the "
             "CLAUDE.md risk rules enforced (see *Risk manager* below).")
     md = _header(name, rule, [ev], ev.verdict, sources, cash_ok)
-    md += ["**Compared with:** equal-weight buy-and-hold of " + "/".join(assets) + " (1/3 each, rebalanced "
+    md += ["**Compared with:** equal-weight buy-and-hold of " + "/".join(assets) + f" (1/{len(assets)} each, rebalanced "
            "monthly), the broad index (SPY), and a same-risk mix of that equal-weight basket plus cash. "
            "**Simplification:** XIU.TO is in Canadian dollars and its returns are added as if in the same currency "
            "(currency moves are ignored).", ""]

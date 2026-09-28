@@ -26,7 +26,12 @@ CSV_DIR = ROOT / "data" / "csv"
 TMP_DIR = ROOT / "data" / "cache"  # scratch space for downloads; not committed
 
 # Stooq uses different ticker names from Yahoo.
-STOOQ_SYMBOLS = {"SPY": "spy.us", "GLD": "gld.us", "CAD=X": "usdcad", "XIU.TO": "xiu.ca"}
+STOOQ_SYMBOLS = {"SPY": "spy.us", "GLD": "gld.us", "IEF": "ief.us", "CAD=X": "usdcad", "XIU.TO": "xiu.ca"}
+
+# The US and Toronto markets close at 16:00 New York time. Before then, a download's row for today holds the
+# LATEST price, not the close, and the lab only ever uses closes. We wait until 17:00 to be safe.
+MARKET_CLOSE_TZ = "America/New_York"
+CLOSE_FINAL_AFTER_HOUR = 17
 
 
 class DataUnavailable(RuntimeError):
@@ -112,12 +117,26 @@ def save_price_csv(df: pd.DataFrame, path: Path) -> None:
     df[["Close"]].to_csv(path, index_label="Date", float_format="%.8g")
 
 
+def drop_unfinished_day(df: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """
+    Remove any row for a day whose close isn't final yet. During the trading day, Yahoo already shows a row for
+    "today" with the latest price in it; saving that as a close would be wrong (and would change later). So a row
+    dated today (New York time) is only kept after 17:00 New York time, and rows dated in the future never are.
+    `now` is only passed in by tests.
+    """
+    now = pd.Timestamp.now(tz=MARKET_CLOSE_TZ) if now is None else pd.Timestamp(now).tz_convert(MARKET_CLOSE_TZ)
+    last_final = now.normalize().tz_localize(None)
+    if now.hour < CLOSE_FINAL_AFTER_HOUR:
+        last_final -= pd.Timedelta(days=1)
+    return df.loc[:last_final]
+
+
 def _download(ticker: str, start: str) -> tuple[pd.DataFrame, str]:
     """Try each download source in turn. Returns (prices, source name) or raises DataUnavailable."""
     errors = []
     for name, fetch in (("Yahoo Finance", _download_yahoo), ("Stooq", _download_stooq)):
         try:
-            df = fetch(ticker, start)
+            df = drop_unfinished_day(fetch(ticker, start))
             if len(df) < 250:
                 raise DataUnavailable(f"only {len(df)} rows")
             return df, name
@@ -132,6 +151,7 @@ def load_prices(ticker: str, start: str = config.START_DATE, demo: bool = False,
     Return (prices, source_description) for one ticker.
 
     refresh=True downloads again and OVERWRITES data/csv/<ticker>.csv (e.g. to get the latest days).
+    Today's row is never saved until the day's close is final (see drop_unfinished_day).
     """
     if demo:
         from lab.synthetic import make_demo_prices
@@ -158,9 +178,13 @@ def load_prices(ticker: str, start: str = config.START_DATE, demo: bool = False,
     return df, f"data/csv/{new_path.name} (downloaded from {source} today)"
 
 
-def load_all(tickers: list[str], demo: bool = False, refresh: bool = False) -> tuple[dict, dict]:
-    """Load several tickers. Returns ({ticker: prices}, {ticker: source})."""
+def load_all(tickers: list[str], demo: bool = False, refresh=False) -> tuple[dict, dict]:
+    """
+    Load several tickers. Returns ({ticker: prices}, {ticker: source}).
+    refresh: False (use the files), True (re-download every ticker) or a list of tickers to re-download.
+    """
     prices, sources = {}, {}
     for t in tickers:
-        prices[t], sources[t] = load_prices(t, demo=demo, refresh=refresh)
+        again = refresh is True or (isinstance(refresh, (list, tuple, set)) and t in refresh)
+        prices[t], sources[t] = load_prices(t, demo=demo, refresh=again)
     return prices, sources

@@ -88,8 +88,24 @@ def make_demo_prices(end: str = "2026-09-25") -> dict:
         daily = (mu + beta * stress_drift) * dt + sigma * vm * np.sqrt(dt) * shocks[:, i]
         close = p0 * np.exp(np.cumsum(daily))
         out[ticker] = pd.DataFrame({"Close": close}, index=pd.DatetimeIndex(dates, name="Date"))
+    out["IEF"] = _demo_bonds(dates, shocks[:, 0], vol_mult)
     out["^IRX"] = _demo_cash_rate(dates)
     return out
+
+
+def _demo_bonds(dates: pd.DatetimeIndex, stock_shocks: np.ndarray, vol_mult: np.ndarray) -> pd.DataFrame:
+    """
+    Made-up 7-10 year Treasury bond prices (IEF), added in session 5. Built from their OWN random numbers (a
+    separate seed), so adding them didn't change any of the other demo assets. Bonds are calmer than stocks
+    (6% volatility a year) and tend to rise a little when stocks crash (correlation about -0.3).
+    """
+    rng = np.random.default_rng(SEED + 100)
+    own = rng.standard_t(df=4, size=len(dates)) / np.sqrt(2.0)
+    rho = -0.3
+    shocks = rho * stock_shocks + np.sqrt(1 - rho ** 2) * own
+    dt = 1 / 252
+    daily = 0.035 * dt + 0.06 * (1 + (vol_mult - 1) * 0.3) * np.sqrt(dt) * shocks
+    return pd.DataFrame({"Close": 60.0 * np.exp(np.cumsum(daily))}, index=pd.DatetimeIndex(dates, name="Date"))
 
 
 # A made-up T-bill rate (% per year), loosely shaped like the real one: ~5% before 2008, near 0%

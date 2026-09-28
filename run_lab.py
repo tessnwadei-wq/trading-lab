@@ -6,6 +6,7 @@ Usage:
     python run_lab.py --strategy ma_trend          # one strategy
     python run_lab.py --strategy portfolio_ma_trend  # just the multi-asset portfolio version
     python run_lab.py --refresh                    # re-download every ticker, overwrite data/csv/, then run
+    python run_lab.py --refresh IEF                # re-download only the tickers named (here IEF), then run
     python run_lab.py --demo                       # made-up practice data (when downloads fail)
     python run_lab.py --reason "why I'm running it"  # recorded with each look at the 2018+ test period
 
@@ -43,8 +44,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Trading Lab: backtest + skeptic")
     ap.add_argument("--strategy", choices=list(STRATEGIES) + list(PORTFOLIOS), help="run only this one")
     ap.add_argument("--demo", action="store_true", help="use synthetic practice data")
-    ap.add_argument("--refresh", action="store_true",
-                    help="re-download every ticker and overwrite the files in data/csv/")
+    ap.add_argument("--refresh", nargs="*", metavar="TICKER", default=None,
+                    help="re-download and overwrite the files in data/csv/: every ticker, or only the ones named")
     ap.add_argument("--reason", default="",
                     help="why you're looking at the 2018+ test results (logged in journal/test_period_looks.csv)")
     args = ap.parse_args(argv)
@@ -53,9 +54,15 @@ def main(argv=None) -> int:
               '--reason "..." so the log says why.')
 
     tickers = config.TRADED_ASSETS + config.COMPARISON_ASSETS
-    print("Re-downloading prices into data/csv/..." if args.refresh else "Loading prices...")
+    # --refresh alone = every ticker (True); --refresh IEF = just those tickers; no --refresh = use the files.
+    refresh = False if args.refresh is None else (args.refresh or True)
+    unknown = [t for t in (args.refresh or []) if t not in tickers + [config.CASH_TICKER]]
+    if unknown:
+        print(f"Unknown ticker(s) for --refresh: {', '.join(unknown)}. Known: {', '.join(tickers + [config.CASH_TICKER])}")
+        return 2
+    print("Re-downloading prices into data/csv/..." if refresh else "Loading prices...")
     try:
-        prices, sources = load_all(tickers, demo=args.demo, refresh=args.refresh)
+        prices, sources = load_all(tickers, demo=args.demo, refresh=refresh)
     except DataUnavailable as exc:
         print(f"\nDATA PROBLEM\n{exc}")
         return 1
@@ -65,7 +72,8 @@ def main(argv=None) -> int:
 
     # Cash interest. Missing IRX data is not fatal: cash then earns 0%, with a loud warning.
     try:
-        irx, irx_source = load_prices(config.CASH_TICKER, demo=args.demo, refresh=args.refresh)
+        irx, irx_source = load_prices(config.CASH_TICKER, demo=args.demo,
+                                      refresh=refresh is True or config.CASH_TICKER in (args.refresh or []))
         print(f"  {'^IRX':7s} {len(irx):5d} days  {irx.index[0].date()} to {irx.index[-1].date()}  ({irx_source})")
     except DataUnavailable:
         irx, irx_source = None, "MISSING (cash earns 0%)"
@@ -110,7 +118,7 @@ def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
     strategy = STRATEGIES[strategy_name]()
     if not demo:
         trials.log_trial(name, "Portfolio", 1, "fixed textbook values; risk settings not tuned")
-    ev = evaluate_portfolio(strategy, prices, cash, is_demo=demo)
+    ev = evaluate_portfolio(strategy, prices, cash, is_demo=demo, assets=config.PORTFOLIO_STRATEGIES[strategy_name])
     print_evaluation("Portfolio", strategy.label(), ev)
     risk = ev.results[("full", "strategy")].risk
     print(f"      Risk rules: {risk.entries} entries, {risk.sized_by_risk_rule} sized by the 1% rule, "

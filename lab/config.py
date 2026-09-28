@@ -38,7 +38,7 @@ EXECUTION_MODES = ("next_close", "same_close")
 # ---- Assets ------------------------------------------------------------------
 TRADED_ASSETS = ["SPY", "XIU.TO"]      # strategies are tested on these
 BROAD_INDEX = "SPY"                    # the "broad index" every strategy is compared against
-COMPARISON_ASSETS = ["GLD", "CAD=X"]   # used in the "How the markets differ" section (GLD also in the portfolio)
+COMPARISON_ASSETS = ["GLD", "IEF", "CAD=X"]  # used in the "How the markets differ" section (GLD, IEF also in portfolios)
 
 # ---- Cash interest -------------------------------------------------------------
 # Money waiting in cash earns roughly the short-term US Treasury bill rate. We use the
@@ -51,6 +51,7 @@ ASSET_NAMES = {
     "SPY": "S&P 500 ETF (US stocks)",
     "XIU.TO": "iShares S&P/TSX 60 ETF (Canadian stocks)",
     "GLD": "SPDR Gold ETF (gold)",
+    "IEF": "iShares 7-10 Year Treasury Bond ETF (US government bonds)",
     "CAD=X": "USD/CAD exchange rate (Canadian dollars per US dollar)",
     "^IRX": "13-week US Treasury bill yield (the cash interest rate)",
 }
@@ -82,8 +83,12 @@ REGIMES = [
 TRADING_DAYS_PER_YEAR = 252
 
 # ---- Portfolio and risk rules (CLAUDE.md "Risk rules", enforced in lab/portfolio.py) ----
-PORTFOLIO_ASSETS = ["SPY", "XIU.TO", "GLD"]
-PORTFOLIO_STRATEGIES = ["ma_trend"]       # strategies also run as a multi-asset portfolio
+# The lab's portfolio universe. IEF (US 7-10 year Treasury bonds) was added in session 5.
+PORTFOLIO_ASSETS = ["SPY", "XIU.TO", "GLD", "IEF"]
+# Strategies also run as a multi-asset portfolio, each with its OWN asset list, frozen when the idea was tested.
+# Adding an asset to the universe must never quietly change an idea that was already tested, so
+# portfolio_ma_trend keeps the three assets it was tested on.
+PORTFOLIO_STRATEGIES = {"ma_trend": ["SPY", "XIU.TO", "GLD"]}
 
 MAX_RISK_PER_TRADE = 0.01        # a stopped-out trade should normally lose no more than 1% of the account,
                                  # INCLUDING the extra day a stop-sale waits for (see STOP_FILL_BUFFER_MOVES)

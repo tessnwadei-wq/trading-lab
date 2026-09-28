@@ -17,7 +17,7 @@
 
 **Ground rules applied:** costs of 0.10% commission + 0.05% slippage on every buy and every sell; each decision is made from a day's closing price and **traded at the next day's close** (so gains and losses start the day after that); parameters chosen on 2005-2017 only; 2018+ used once as the out-of-sample test. Money in cash earns the 13-week US T-bill rate (^IRX), used for every asset including XIU.TO (a simplification), and Sharpe ratios measure return *above* that cash rate.
 
-**Data sources:** SPY: data/csv/SPY.csv; XIU.TO: data/csv/XIU_TO.csv; GLD: data/csv/GLD.csv; CAD=X: data/csv/CAD_X.csv; ^IRX: data/csv/IRX.csv
+**Data sources:** SPY: data/csv/SPY.csv; XIU.TO: data/csv/XIU_TO.csv; GLD: data/csv/GLD.csv; IEF: data/csv/IEF.csv (downloaded from Yahoo Finance today); CAD=X: data/csv/CAD_X.csv; ^IRX: data/csv/IRX.csv
 
 **Parameter search on SPY (training data only):** tried **1,920 combinations** and kept the best: `overfit_demo(fast=40, slow=210, band=0.03, min_hold=5)`, training Sharpe 0.86. The median combination scored 0.55. Picking the top of 1,920 tries almost guarantees a lucky winner; the question is whether it holds up in 2018+. (The search scores every combination with next-close timing, so the winner is picked to suit it: in the *Timing cost* table below, its same-close row is not a fair "before".)
 
@@ -261,40 +261,41 @@ The 2018+ test period should be looked at **once** per idea. This idea's test re
 
 ## How the markets differ
 
-The lab will eventually trade more than stocks, so here is how four very different markets behaved over the same years. Nothing here is traded yet.
+Here is how 5 very different markets behaved over the same years. Stocks (SPY, XIU.TO) are what the single-asset strategies trade; GLD and IEF are also in the multi-asset portfolios; CAD=X is shown for comparison only.
 
 | Market | Average yearly return | Best year | Worst year | Worst drawdown | Moves with SPY (correlation) |
 |---|---:|---:|---:|---:|---:|
 | SPY: S&P 500 ETF (US stocks) | 12.5% | 32.3% (2013) | -36.8% (2008) | -55.2% | +1.00 |
 | XIU.TO: iShares S&P/TSX 60 ETF (Canadian stocks) | 9.9% | 31.4% (2009) | -31.1% (2008) | -47.9% | +0.80 |
 | GLD: SPDR Gold ETF (gold) | 11.7% | 63.7% (2025) | -28.3% (2013) | -45.6% | +0.07 |
+| IEF: iShares 7-10 Year Treasury Bond ETF (US government bonds) | 3.3% | 17.9% (2008) | -15.2% (2022) | -23.9% | -0.28 |
 | CAD=X: USD/CAD exchange rate (Canadian dollars per US dollar) | 1.3% | 21.9% (2008) | -14.3% (2007) | -27.6% | -0.24 |
 
 <details><summary>Year-by-year returns (click to open)</summary>
 
-| Year | SPY | XIU.TO | GLD | CAD=X |
-|---|---:|---:|---:|---:|
-| 2006 | 15.8% | 19.1% | 22.5% | 0.3% |
-| 2007 | 5.1% | 10.8% | 30.5% | -14.3% |
-| 2008 | -36.8% | -31.1% | 4.9% | 21.9% |
-| 2009 | 26.4% | 31.4% | 24.0% | -13.5% |
-| 2010 | 15.1% | 13.9% | 29.3% | -5.0% |
-| 2011 | 1.9% | -9.3% | 9.6% | 2.1% |
-| 2012 | 16.0% | 7.9% | 6.6% | -2.5% |
-| 2013 | 32.3% | 13.1% | -28.3% | 7.0% |
-| 2014 | 13.5% | 11.9% | -2.2% | 9.0% |
-| 2015 | 1.2% | -7.8% | -10.7% | 19.5% |
-| 2016 | 12.0% | 20.3% | 8.0% | -2.8% |
-| 2017 | 21.7% | 9.6% | 12.8% | -6.8% |
-| 2018 | -4.6% | -7.8% | -1.9% | 8.4% |
-| 2019 | 31.2% | 21.8% | 17.9% | -4.1% |
-| 2020 | 18.3% | 5.3% | 24.8% | -2.4% |
-| 2021 | 28.7% | 28.1% | -4.1% | -0.0% |
-| 2022 | -18.2% | -6.3% | -0.8% | 6.3% |
-| 2023 | 26.2% | 11.9% | 12.7% | -2.4% |
-| 2024 | 24.9% | 20.7% | 26.7% | 8.5% |
-| 2025 | 17.7% | 28.9% | 63.7% | -4.6% |
-| 2026 | 14.0% | 14.8% | -0.7% | 3.3% |
+| Year | SPY | XIU.TO | GLD | IEF | CAD=X |
+|---|---:|---:|---:|---:|---:|
+| 2006 | 15.8% | 19.1% | 22.5% | 2.5% | 0.3% |
+| 2007 | 5.1% | 10.8% | 30.5% | 10.4% | -14.3% |
+| 2008 | -36.8% | -31.1% | 4.9% | 17.9% | 21.9% |
+| 2009 | 26.4% | 31.4% | 24.0% | -6.6% | -13.5% |
+| 2010 | 15.1% | 13.9% | 29.3% | 9.4% | -5.0% |
+| 2011 | 1.9% | -9.3% | 9.6% | 15.6% | 2.1% |
+| 2012 | 16.0% | 7.9% | 6.6% | 3.7% | -2.5% |
+| 2013 | 32.3% | 13.1% | -28.3% | -6.1% | 7.0% |
+| 2014 | 13.5% | 11.9% | -2.2% | 9.1% | 9.0% |
+| 2015 | 1.2% | -7.8% | -10.7% | 1.5% | 19.5% |
+| 2016 | 12.0% | 20.3% | 8.0% | 1.0% | -2.8% |
+| 2017 | 21.7% | 9.6% | 12.8% | 2.6% | -6.8% |
+| 2018 | -4.6% | -7.8% | -1.9% | 1.0% | 8.4% |
+| 2019 | 31.2% | 21.8% | 17.9% | 8.0% | -4.1% |
+| 2020 | 18.3% | 5.3% | 24.8% | 10.0% | -2.4% |
+| 2021 | 28.7% | 28.1% | -4.1% | -3.3% | -0.0% |
+| 2022 | -18.2% | -6.3% | -0.8% | -15.2% | 6.3% |
+| 2023 | 26.2% | 11.9% | 12.7% | 3.6% | -2.4% |
+| 2024 | 24.9% | 20.7% | 26.7% | -0.6% | 8.5% |
+| 2025 | 17.7% | 28.9% | 63.7% | 8.0% | -4.6% |
+| 2026 | 14.0% | 14.8% | -0.7% | -3.9% | 3.3% |
 
 </details>
 
@@ -303,6 +304,7 @@ The lab will eventually trade more than stocks, so here is how four very differe
 - **Correlation** runs from -1 to +1. +1 means "always moves the same way as SPY", 0 means "no relationship", -1 means "always moves the opposite way". Something with low or negative correlation can cushion a stock portfolio when stocks fall.
 - **Canadian vs US stocks** (XIU.TO vs SPY, correlation +0.80): they tend to rise and fall together, so holding both diversifies less than it seems.
 - **Gold** (GLD, correlation +0.07): largely goes its own way. It's a commodity with no earnings or dividends; people buy it as a store of value, often when they're worried.
+- **US government bonds** (IEF, correlation -0.28): a loan to the US government for 7-10 years that pays interest. Bond prices move opposite to interest rates: when rates rise, older bonds paying less are worth less. In most stock crashes (2008, 2020) investors fled to safety, rates fell and IEF *rose*, so it often cushions a stock portfolio. But when inflation forces rates up fast (2022), stocks and bonds can fall together.
 - **USD/CAD** (CAD=X, correlation -0.24): this is a *price of a currency*, not an investment that grows. When it goes UP, one US dollar buys more Canadian dollars (the CAD got weaker). It usually moves much less than stocks, which is why forex traders often use leverage (borrowed money), and that's where forex gets dangerous.
 - **Worst drawdown** is the biggest peak-to-bottom fall. It's the number that tells you how much pain you'd have had to sit through.
 
