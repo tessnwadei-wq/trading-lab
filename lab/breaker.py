@@ -13,7 +13,7 @@ adding up to a big loss.
 
 What "a review" means depends on the MODE:
 
-  paper  (future paper trading) A person must reset it. Nothing restarts by itself.
+  paper  (paper trading: paper_trade.py / lab/paper.py) A person must reset it. Nothing restarts by itself.
          HUMAN-ONLY (CLAUDE.md): only Tessy resets it, by typing at a terminal:
          `python reset_circuit_breaker.py --who Tessy --reason "..."`, then typing RESET to confirm
          (and, for the 20% hard floor, an extra confirmation). Agents must never run, script or
@@ -49,7 +49,7 @@ from lab import config
 
 ROOT = Path(__file__).resolve().parent.parent
 RESET_LOG = ROOT / "journal" / "circuit_breaker_resets.csv"
-PAPER_STATE = ROOT / "paper" / "circuit_breaker.json"   # created by paper trading (a later phase)
+PAPER_STATE = ROOT / "paper" / "circuit_breaker.json"   # created by `python paper_trade.py --start` (lab/paper.py)
 RESET_COLUMNS = ["reset_at", "who", "reason", "tripped_on", "fall_from_peak", "kind", "log_sha256_before"]
 CONFIRM_WORD = "RESET"                  # what a person must type to confirm any reset
 HARD_FLOOR_CONFIRM_WORD = "HARD FLOOR"  # the extra word for resetting the 20% hard floor

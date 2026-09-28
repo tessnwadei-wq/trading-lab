@@ -116,6 +116,26 @@ class PortfolioResult(BacktestResult):
     weights: pd.DataFrame = None      # share of the account in each asset, each day
 
 
+def risk_sized_order(avg_move: float, rate: float, max_weight: float | None = None) -> tuple[dict, bool]:
+    """
+    The 1% rule and the 20% cap, as an order: ({"size", "distance", "loss_per_dollar"}, True if the 1% rule set
+    the size). Shared by the backtest engine and the paper account (lab/paper.py), so both size trades the same way.
+    avg_move = the asset's average daily move over the last 20 days; rate = the cost of one trade (0.15%).
+    """
+    max_weight = config.MAX_POSITION_WEIGHT if max_weight is None else max_weight
+    distance = config.STOP_ATR_MULTIPLE * avg_move            # e.g. 3 x 0.8% = 2.4%: where the stop goes
+    # One-day buffer: the stop-sale fills a close later, so size as if the stop were 2 more average
+    # daily moves away (e.g. 2 x 0.8% = 1.6%). The stop itself stays where it is.
+    buffer = config.STOP_FILL_BUFFER_MOVES * avg_move
+    # Loss per $1 invested if the stop is hit: the price fall (stop + buffer), plus the cost to buy
+    # and to sell.
+    fall = distance + buffer                                  # e.g. 2.4% + 1.6% = 4.0%
+    loss_per_dollar = fall + rate + (1 - fall) * rate         # e.g. 4.0% + 0.15% + 0.14% = 4.3%
+    risk_size = config.MAX_RISK_PER_TRADE / loss_per_dollar  # 1% / 4.3% = 23% of the account
+    by_risk = risk_size < max_weight
+    return {"size": risk_size if by_risk else max_weight, "distance": distance, "loss_per_dollar": loss_per_dollar}, by_risk
+
+
 def _prepare(strategy, prices: dict, assets: list, cash_rate):
     """Line every asset up on one calendar. Signals and stop distances use each asset's own history."""
     raw = pd.DataFrame({a: prices[a]["Close"] for a in assets})
@@ -227,21 +247,7 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
         return True
 
     def sized_order(a, j):
-        """
-        The 1% rule and the 20% cap, as an order: {"size", "distance", "loss_per_dollar"}, plus which rule set it.
-        """
-        distance = config.STOP_ATR_MULTIPLE * move[j, a]        # e.g. 3 x 0.8% = 2.4%: where the stop goes
-        # One-day buffer: the stop-sale fills a close later, so size as if the stop were 2 more average
-        # daily moves away (e.g. 2 x 0.8% = 1.6%). The stop itself stays where it is.
-        buffer = config.STOP_FILL_BUFFER_MOVES * move[j, a]
-        # Loss per $1 invested if the stop is hit: the price fall (stop + buffer), plus the cost to buy
-        # and to sell.
-        fall = distance + buffer                                  # e.g. 2.4% + 1.6% = 4.0%
-        loss_per_dollar = fall + rate + (1 - fall) * rate         # e.g. 4.0% + 0.15% + 0.14% = 4.3%
-        risk_size = config.MAX_RISK_PER_TRADE / loss_per_dollar  # 1% / 4.3% = 23% of the account
-        by_risk = risk_size < config.MAX_POSITION_WEIGHT
-        size = risk_size if by_risk else config.MAX_POSITION_WEIGHT
-        return {"size": size, "distance": distance, "loss_per_dollar": loss_per_dollar}, by_risk
+        return risk_sized_order(move[j, a], rate)
 
     def resize(a, order, j, equity):
         """
