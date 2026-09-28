@@ -89,3 +89,29 @@ overfit_demo 3, portfolio_ma_trend 5, **vol_target 1** (exactly the one the rule
 3. **Compare risk as well as return.** A strategy that earns a bit more than the mix while being bumpier hasn't really
    won; the Sharpe comparison shows it.
 4. **Build the delay into the rule.** Sizing for the one-day wait on stop-sales kept every stop-out within 1%.
+
+---
+
+## Update, 2026-09-28 (session 5: equal-risk check, bonds, time-series momentum, paper-account plumbing)
+
+*Added underneath; earlier sections are kept as written.*
+
+**Experiments this month so far:** 12 (2 synthetic, 10 real). **PASS 0 · FAIL 12 · NEEDS MORE DATA 0.**
+**Ideas tested on real data:** 5 (ma_trend, overfit_demo, portfolio_ma_trend, vol_target, ts_momentum); **3,846
+parameter combinations** in `trials.csv` (ts_momentum added 1: no search). **Test-period looks:** ma_trend 4,
+overfit_demo 4, portfolio_ma_trend 6, vol_target 2, **ts_momentum 1**.
+
+| Date | Strategy | Verdict | One-line reason |
+|---|---|---|---|
+| 2026-09-28 | ideas 1-4 re-run with the equal-risk mix in check 3 | FAIL (no changes) | vol_target's win over the same-risk mix becomes a loss at equal risk (SPY -0.17, XIU.TO -1.49 points a year). |
+| 2026-09-28 | ts_momentum (pre-registered) | FAIL | Lost to the fair control on Sharpe (0.47 vs 0.81) and to the equal-risk mix (-1.56 points a year); flat sensitivity grid. |
+
+### Top lessons (session 5)
+1. **Judge at equal risk in the period you're judging.** A benchmark sized on old data can be out-risked, and then a
+   "win" is just pay for extra risk. The equal-risk mix closed that loophole, and vol_target's only win disappeared.
+2. **A fair control isolates one thing.** Holding the same four assets at 20% each, always, showed that the momentum
+   signal (with the lab's risk rules) added nothing.
+3. **Risk rules interact with strategies.** A stop reset every month sat 1-2% below the price and turned normal dips
+   into sales; the frozen spec made that visible and un-fixable after the fact, which is the point.
+4. **Build the plumbing before you need it.** The paper account now exists, runs only buy-and-hold, and refuses to run
+   on edited or uncommitted files.
