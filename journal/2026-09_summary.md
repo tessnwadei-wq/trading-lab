@@ -113,5 +113,7 @@ overfit_demo 4, portfolio_ma_trend 6, vol_target 2, **ts_momentum 2** (the secon
    signal (with the lab's risk rules) added nothing.
 3. **Risk rules interact with strategies.** A stop reset every month sat 1-2% below the price and turned normal dips
    into sales; the frozen spec made that visible and un-fixable after the fact, which is the point.
-4. **Build the plumbing before you need it.** The paper account now exists, runs only buy-and-hold, and refuses to run
-   on edited or uncommitted files.
+4. **Build the plumbing before you need it, and have it attacked.** The paper account now exists, runs only
+   buy-and-hold, and refuses to run on edited or uncommitted files. The risk-manager review first said BLOCKED (a
+   resize bug and a delete-and-restart way round the breaker); after the fixes: **CLEARED for the buy-and-hold
+   practice run only**. No strategy is cleared.
