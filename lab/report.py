@@ -236,7 +236,7 @@ def control_md(ev: AssetEvaluation) -> list[str]:
     if not ev.control_name:
         return []
     lines = ["### Head to head: strategy vs the fair control", "",
-             f"The fair control is {ev.control_name}, rebalanced monthly, with the same costs and trade timing. It "
+             f"Fair control: {ev.control_name}, rebalanced monthly, with the same costs and trade timing. It "
              "holds exactly what the strategy *could* hold, all the time, so the difference between them is what the "
              "signal (and the risk rules) added. It is always more invested than the strategy, so the fair comparison "
              "is per unit of risk: Sharpe.", "",
