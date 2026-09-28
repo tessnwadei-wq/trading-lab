@@ -88,7 +88,8 @@ PORTFOLIO_ASSETS = ["SPY", "XIU.TO", "GLD", "IEF"]
 # Strategies also run as a multi-asset portfolio, each with its OWN asset list, frozen when the idea was tested.
 # Adding an asset to the universe must never quietly change an idea that was already tested, so
 # portfolio_ma_trend keeps the three assets it was tested on.
-PORTFOLIO_STRATEGIES = {"ma_trend": ["SPY", "XIU.TO", "GLD"]}
+PORTFOLIO_STRATEGIES = {"ma_trend": ["SPY", "XIU.TO", "GLD"],
+                        "ts_momentum": ["SPY", "XIU.TO", "GLD", "IEF"]}   # session 5, pre-registered
 
 MAX_RISK_PER_TRADE = 0.01        # a stopped-out trade should normally lose no more than 1% of the account,
                                  # INCLUDING the extra day a stop-sale waits for (see STOP_FILL_BUFFER_MOVES)

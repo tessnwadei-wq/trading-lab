@@ -32,7 +32,7 @@ SURFACE, INK, INK_2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
 WHO_LABEL = {"strategy": "Strategy", "strategy_2x": "Strategy (double costs)",
              "buy_hold": "Buy-and-hold", "index": "Broad index (SPY)", "mix": "Same-risk mix",
-             "eqmix": "Equal-risk mix"}
+             "eqmix": "Equal-risk mix", "control": "Fair control"}
 
 
 def who_label(ev: AssetEvaluation, who: str) -> str:
@@ -40,6 +40,8 @@ def who_label(ev: AssetEvaluation, who: str) -> str:
         return ev.benchmark_name[0].upper() + ev.benchmark_name[1:]
     if who == "mix":
         return f"Same-risk mix ({ev.mix_weight:.0%} in, {1 - ev.mix_weight:.0%} cash)"
+    if who == "control":
+        return ev.control_name[0].upper() + ev.control_name[1:] if ev.control_name else "Fair control"
     if who == "eqmix":
         return f"Equal-risk mix ({ev.eq_mix_weight:.0%} in, {1 - ev.eq_mix_weight:.0%} cash)"
     return WHO_LABEL[who]
@@ -171,18 +173,21 @@ def _pct(x, d=1):
 
 def metrics_table(ev: AssetEvaluation) -> str:
     rebal = ev.sample_size_rule == "rebalances"
-    count_col = f"Active rebalances (≥{config.ACTIVE_REBALANCE_MIN_CHANGE * 100:.0f} pts)" if rebal else "Trades"
+    flips = ev.sample_size_rule == "signal_changes"
+    count_col = (f"Active rebalances (≥{config.ACTIVE_REBALANCE_MIN_CHANGE * 100:.0f} pts)" if rebal
+                 else "Signal changes" if flips else "Trades")
     lines = [f"| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | {count_col} | Win rate | Avg. share invested |",
              "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for p in ("train", "test", "full"):
-        for who in ("strategy", "strategy_2x", "buy_hold", "index", "mix", "eqmix"):
+        for who in ("strategy", "strategy_2x", "buy_hold", "index", "control", "mix", "eqmix"):
             if (p, who) not in ev.metrics.index:
                 continue   # the equal-risk mix only exists in the test period
             r = ev.metrics.loc[(p, who)]
             is_strat = who.startswith("strategy")
             count = (ev.results[(p, who)].rebalances(config.ACTIVE_REBALANCE_MIN_CHANGE) if rebal and is_strat
-                     else "-" if rebal else int(r.n_trades))
-            win = "-" if rebal or not is_strat else _pct(r.win_rate, 0)
+                     else ev.signal_changes[p] if flips and is_strat
+                     else "-" if rebal or flips else int(r.n_trades))
+            win = "-" if rebal or flips or not is_strat else _pct(r.win_rate, 0)
             lines.append(f"| {PERIOD_LABEL[p]} | {who_label(ev, who)} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
                          f"{_pct(r.max_drawdown)} | {_pct(r.volatility)} | {count} | {win} | "
                          f"{_pct(r.time_in_market, 0)} |")
@@ -222,6 +227,37 @@ def mix_head_to_head_md(ev: AssetEvaluation) -> list[str]:
                    f"extra risk. Per unit of risk (Sharpe) it scored {t.sharpe:.2f} vs the mix's {m.sharpe:.2f}.")
     lines += ["", "**Answer (test period, 2018+):** " + answer, ""]
     lines += equal_risk_md(ev)
+    lines += control_md(ev)
+    return lines
+
+
+def control_md(ev: AssetEvaluation) -> list[str]:
+    """The pre-registered fair control (ts_momentum): same assets, fixed weights, always held. Compared on Sharpe."""
+    if not ev.control_name:
+        return []
+    lines = ["### Head to head: strategy vs the fair control", "",
+             f"The fair control is {ev.control_name}, rebalanced monthly, with the same costs and trade timing. It "
+             "holds exactly what the strategy *could* hold, all the time, so the difference between them is what the "
+             "signal (and the risk rules) added. It is always more invested than the strategy, so the fair comparison "
+             "is per unit of risk: Sharpe.", "",
+             "| Period | Costs | Strategy Sharpe | Control Sharpe | Strategy CAGR | Control CAGR | Strategy volatility | "
+             "Control volatility | Strategy worst fall | Control worst fall |",
+             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for p in ("train", "test", "full"):
+        for label, sfx in (("normal", ""), ("double", "_2x")):
+            a, b = ev.metrics.loc[(p, "strategy" + sfx)], ev.metrics.loc[(p, "control" + sfx)]
+            bold = "**" if p == "test" else ""
+            lines.append(f"| {bold}{PERIOD_LABEL[p]}{bold} | {label} | {bold}{a.sharpe:.2f}{bold} | {bold}{b.sharpe:.2f}{bold} | "
+                         f"{_pct(a.cagr)} | {_pct(b.cagr)} | {_pct(a.volatility)} | {_pct(b.volatility)} | "
+                         f"{_pct(a.max_drawdown)} | {_pct(b.max_drawdown)} |")
+    t, t2 = ev.metrics.loc[("test", "strategy")], ev.metrics.loc[("test", "strategy_2x")]
+    c, c2 = ev.metrics.loc[("test", "control")], ev.metrics.loc[("test", "control_2x")]
+    won = t.sharpe > c.sharpe and t2.sharpe > c2.sharpe
+    lines += ["", "**Answer (test period, 2018+):** " + (
+        "the signal added something: per unit of risk the strategy beat always holding the same assets, at normal "
+        "AND double costs." if won else
+        f"the signal did **not** add anything per unit of risk: Sharpe {t.sharpe:.2f} vs {c.sharpe:.2f} at normal "
+        f"costs, {t2.sharpe:.2f} vs {c2.sharpe:.2f} at double costs."), ""]
     return lines
 
 
@@ -451,6 +487,10 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
              f"Largest position at any close: {log.max_position_weight:.1%} ({log.days_over_cap} position-days closed "
              f"above {config.MAX_POSITION_WEIGHT:.0%}, each trimmed at the next close); "
              f"**{len(log.alerts)}** alert{'s' if len(log.alerts) != 1 else ''} above {config.POSITION_ALERT_WEIGHT:.0%} |",
+             *([f"| Monthly resizes | Every month-end, each held asset whose signal stays \"hold\" is resized to a "
+                f"fresh 1%-rule / {config.MAX_POSITION_WEIGHT:.0%}-cap size and its stop reset (pre-registered) | "
+                f"{log.resizes} resizes filled; {log.resizes_blocked_by_breaker} top-ups skipped because the circuit "
+                f"breaker was on | - |"] if log.resizes or log.resizes_blocked_by_breaker else []),
              f"| Max open positions | {config.MAX_OPEN_POSITIONS} | Blocked {log.blocked_by_max_positions} entries | "
              f"Most open at once: {log.max_open_positions} (only {len(res.weights.columns)} assets, so this rule "
              f"{'can never bind yet' if len(res.weights.columns) <= config.MAX_OPEN_POSITIONS else 'can bind'}) |",
@@ -670,8 +710,9 @@ def write_report(strategy, evaluations: list[AssetEvaluation], overall: str, sou
     return path
 
 
-def write_portfolio_report(strategy, ev: AssetEvaluation, sources: dict, cash_ok: bool = True) -> Path:
-    name = f"portfolio_{strategy.name}"
+def write_portfolio_report(strategy, ev: AssetEvaluation, sources: dict, cash_ok: bool = True,
+                           name: str | None = None) -> Path:
+    name = name or f"portfolio_{strategy.name}"
     out_dir = REPORTS_DIR / name
     out_dir.mkdir(parents=True, exist_ok=True)
     assets = list(ev.results[("full", "strategy")].weights.columns)
@@ -679,9 +720,17 @@ def write_portfolio_report(strategy, ev: AssetEvaluation, sources: dict, cash_ok
             "CLAUDE.md risk rules enforced (see *Risk manager* below).")
     md = _header(name, rule, [ev], ev.verdict, sources, cash_ok)
     md += ["**Compared with:** equal-weight buy-and-hold of " + "/".join(assets) + f" (1/{len(assets)} each, rebalanced "
-           "monthly), the broad index (SPY), and a same-risk mix of that equal-weight basket plus cash. "
+           "monthly), the broad index (SPY), a same-risk mix of that equal-weight basket plus cash, and the equal-risk mix "
+           "(the same mix at the strategy's 2018+ volatility). "
            "**Simplification:** XIU.TO is in Canadian dollars and its returns are added as if in the same currency "
            "(currency moves are ignored).", ""]
+    if ev.control_name:
+        md[-2] = md[-2].replace("**Compared with:** ", f"**Compared with:** {ev.control_name}, ")
+    pre = spec_md(strategy, ev.is_demo)
+    if pre:
+        md += [pre, ""]
+    if getattr(strategy, "report_note", ""):
+        md += [strategy.report_note, ""]
     exposure_chart(ev, out_dir / "portfolio_exposure.png")
     md += [risk_manager_section(ev), "", "## Portfolio results", ""] + _asset_section(ev, out_dir)
     md += [trials_section([ev], name, ev.is_demo), "",

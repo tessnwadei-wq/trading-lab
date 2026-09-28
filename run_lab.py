@@ -4,7 +4,8 @@ Run the whole lab: load data, backtest each strategy, run the skeptic, write rep
 Usage:
     python run_lab.py                              # all strategies + portfolios, data from data/csv/
     python run_lab.py --strategy ma_trend          # one strategy
-    python run_lab.py --strategy portfolio_ma_trend  # just the multi-asset portfolio version
+    python run_lab.py --strategy portfolio_ma_trend  # just the multi-asset portfolio version of ma_trend
+    python run_lab.py --strategy ts_momentum       # the 4-asset time-series momentum portfolio (idea #5)
     python run_lab.py --refresh                    # re-download every ticker, overwrite data/csv/, then run
     python run_lab.py --refresh IEF                # re-download only the tickers named (here IEF), then run
     python run_lab.py --demo                       # made-up practice data (when downloads fail)
@@ -29,6 +30,7 @@ from lab.report import write_portfolio_report, write_report
 from lab.skeptic import evaluate, overall_verdict
 from strategies.ma_trend import MATrend
 from strategies.overfit_demo import OverfitDemo
+from strategies.ts_momentum import TSMomentum
 from strategies.vol_target import VolTarget
 
 # Register new strategies here.
@@ -37,7 +39,11 @@ STRATEGIES = {
     "overfit_demo": OverfitDemo,
     "vol_target": VolTarget,
 }
-PORTFOLIOS = {f"portfolio_{name}": name for name in config.PORTFOLIO_STRATEGIES}
+# Portfolio-only ideas (tested only as a multi-asset account, never asset by asset).
+PORTFOLIO_ONLY = {"ts_momentum": TSMomentum}
+# Run name -> strategy name. A single-asset idea's portfolio version is called "portfolio_<name>"; a portfolio-only
+# idea keeps its own name (its report is reports/<name>/report.md). Asset lists: config.PORTFOLIO_STRATEGIES.
+PORTFOLIOS = {(name if name in PORTFOLIO_ONLY else f"portfolio_{name}"): name for name in config.PORTFOLIO_STRATEGIES}
 
 
 def main(argv=None) -> int:
@@ -115,14 +121,19 @@ def main(argv=None) -> int:
 
 
 def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
-    strategy = STRATEGIES[strategy_name]()
+    if strategy_name in PORTFOLIO_ONLY:
+        strategy = PORTFOLIO_ONLY[strategy_name](cash_rate=cash)   # ts_momentum compares each asset with cash
+    else:
+        strategy = STRATEGIES[strategy_name]()
     if not demo:
-        trials.log_trial(name, "Portfolio", 1, "fixed textbook values; risk settings not tuned")
+        trials.log_trial(name, "Portfolio", 1, getattr(strategy, "how_chosen",
+                                                       "fixed textbook values; risk settings not tuned"))
     ev = evaluate_portfolio(strategy, prices, cash, is_demo=demo, assets=config.PORTFOLIO_STRATEGIES[strategy_name])
     print_evaluation("Portfolio", strategy.label(), ev)
     risk = ev.results[("full", "strategy")].risk
     print(f"      Risk rules: {risk.entries} entries, {risk.sized_by_risk_rule} sized by the 1% rule, "
-          f"{risk.sized_by_cap} capped at 20%, {risk.trims} trims, {risk.stop_exits} stop exits, "
+          f"{risk.sized_by_cap} capped at 20%, {risk.trims} trims, {risk.resizes} monthly resizes, "
+          f"{risk.stop_exits} stop exits, "
           f"circuit breaker triggered {len(risk.breaker_events)} times")
     if risk.alerts:
         print(f"      POSITION ALERT: a position ended the day above {config.POSITION_ALERT_WEIGHT:.0%} "
@@ -135,7 +146,7 @@ def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
         print(f"      FLAG FOR REVIEW: circuit breaker tripped {b['tripped'].date()} ({b['drawdown']:.1%} from peak)")
     if not demo:
         record_look(name, [ev], reason)
-    path = write_portfolio_report(strategy, ev, sources, cash_ok=cash is not None)
+    path = write_portfolio_report(strategy, ev, sources, cash_ok=cash is not None, name=name)
     print(f"  Overall: {ev.verdict}. Report: {path.relative_to(path.parents[2])}")
 
 
