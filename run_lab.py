@@ -137,6 +137,10 @@ def record_look(idea, evaluations, reason):
     for ev in evaluations:
         m = ev.metrics.loc[("test", "strategy")]
         numbers += [ev.ticker, ev.strategy_label, m.sharpe, m.cagr, m.max_drawdown, m.n_trades]
+        # A new comparison shown against the 2018+ results is new test-period information, so it is part of the
+        # fingerprint too: adding the equal-risk mix (session 5) made every idea's next run a new look.
+        if ("test", "eqmix") in ev.metrics.index:
+            numbers += ["eqmix", ev.metrics.loc[("test", "eqmix"), "cagr"]]
     new = trials.log_look(idea, reason or "not given (run without --reason)", trials.results_fingerprint(numbers))
     n = len(trials.looks_for(idea))
     print(f"  Test-period look #{n} for {idea} logged." if new else

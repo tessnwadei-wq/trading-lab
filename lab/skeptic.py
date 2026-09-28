@@ -25,9 +25,16 @@ The rules (kept deliberately simple so a beginner can argue with them):
                    * buy-and-hold of the same asset  (compared on Sharpe ratio)
                    * the broad index, SPY            (compared on Sharpe ratio)
                    * the same-risk mix               (compared on yearly return, CAGR)
-                 Why CAGR for the mix: the mix is built to be exactly as bumpy as the strategy, so
-                 at equal risk the fair question is simply "who earned more?". (Its Sharpe is almost
-                 identical to buy-and-hold's, so a Sharpe comparison would just repeat that test.)
+                   * the equal-risk mix              (compared on yearly return, CAGR)
+                 Why CAGR for the mixes: a mix is built to be as bumpy as the strategy, so at equal
+                 risk the fair question is simply "who earned more?". (Its Sharpe is almost identical
+                 to buy-and-hold's, so a Sharpe comparison would just repeat that test.)
+                 The same-risk mix is sized on TRAINING data, so in the test period the strategy can
+                 end up bumpier than it and "win" just by taking more risk (vol_target did this). The
+                 equal-risk mix (session 5) closes that loophole: the same mix, rescaled so that its
+                 TEST-period volatility equals the strategy's TEST-period volatility. This is allowed
+                 to use test-period data because it is a yardstick for judging, never a strategy
+                 decision: nothing about the strategy changes. Losing to it = FAIL.
   4 Sensitivity  On training data, the neighbouring parameter settings must have a median
                  Sharpe of at least 70% of the chosen setting's, and none may lose money.
   5 Sample size  At least 30 trades over the whole period, else NEEDS MORE DATA.
@@ -63,6 +70,7 @@ PASS, WARN, FAIL, NMD = "PASS", "WARN", "FAIL", "NEEDS MORE DATA"
 
 # Who is compared with whom. "_2x" = the same thing with double trading costs.
 WHO = ["strategy", "strategy_2x", "buy_hold", "buy_hold_2x", "index", "index_2x", "mix", "mix_2x"]
+# Plus, in the test period only: "eqmix" and "eqmix_2x", the equal-risk mix (see equal_risk_weight).
 
 
 @dataclass
@@ -110,6 +118,7 @@ class AssetEvaluation:
     regimes: pd.DataFrame
     timing: pd.DataFrame = None   # key metrics under same-close vs next-close execution
     mix_weight: float = 1.0       # share of the account in the asset(s) for the same-risk mix
+    eq_mix_weight: float = 1.0    # the same for the equal-risk mix (test period only)
     benchmark_name: str = "buy-and-hold"
     sample_size_rule: str = "trades"
     checks: list = field(default_factory=list)
@@ -214,6 +223,23 @@ def same_risk_weight(strategy_train: BacktestResult, benchmark_train: BacktestRe
     return float(np.clip(volatility(strategy_train.returns) / bench_vol, 0.0, 1.0))
 
 
+def equal_risk_weight(mix_weight: float, strategy_test: BacktestResult, mix_test: BacktestResult) -> float:
+    """
+    X for the EQUAL-RISK mix: the same-risk mix rescaled so that, in the TEST period, it is exactly as bumpy
+    as the strategy was in the test period. Mixing an asset with cash scales volatility in proportion to the
+    share invested, so if the strategy was 10% bumpier than the mix, the equal-risk mix holds 10% more.
+
+    Using test-period data is allowed here: this is a yardstick for JUDGING the result, not a strategy
+    decision (nothing about the strategy changes). It stops a strategy "winning" by simply taking more risk
+    than a mix that was sized on training data. Capped at 100% (no borrowing), so a strategy that is bumpier
+    than the asset itself is compared with 100% of the asset.
+    """
+    mix_vol = volatility(mix_test.returns)
+    if mix_vol <= 0 or mix_weight <= 0:
+        return float(np.clip(mix_weight, 0.0, 1.0))
+    return float(np.clip(mix_weight * volatility(strategy_test.returns) / mix_vol, 0.0, 1.0))
+
+
 # --------------------------------------------------------------------------------------
 # The main evaluation
 # --------------------------------------------------------------------------------------
@@ -266,6 +292,11 @@ def evaluate_subject(subject: Subject, is_demo: bool = False) -> AssetEvaluation
         results[(p, "mix")] = subject.run_mix(weight, s, e, 1.0)
         results[(p, "mix_2x")] = subject.run_mix(weight, s, e, 2.0)
 
+    # Equal-risk mix: the same mix, rescaled to the strategy's TEST-period volatility. Test period only.
+    eq_weight = equal_risk_weight(weight, results[("test", "strategy")], results[("test", "mix")])
+    results[("test", "eqmix")] = subject.run_mix(eq_weight, *periods["test"], 1.0)
+    results[("test", "eqmix_2x")] = subject.run_mix(eq_weight, *periods["test"], 2.0)
+
     rows = [{"period": p, "who": who, **summarize(res)} for (p, who), res in results.items()]
     metrics = pd.DataFrame(rows).set_index(["period", "who"])
 
@@ -274,7 +305,7 @@ def evaluate_subject(subject: Subject, is_demo: bool = False) -> AssetEvaluation
     timing = timing_table(subject, periods, results)
 
     ev = AssetEvaluation(subject.ticker, subject.label, is_demo, periods, results, metrics,
-                         sens, params, chosen, regimes, timing, weight, subject.benchmark_name,
+                         sens, params, chosen, regimes, timing, weight, eq_weight, subject.benchmark_name,
                          subject.sample_size_rule)
     ev.checks = run_checks(subject, ev)
     ev.verdict, ev.reason = verdict(ev.checks, is_demo)
@@ -345,13 +376,16 @@ def _gap(a: float, b: float, pct: bool = False) -> str:
 
 
 def alternatives_comparisons(m: pd.DataFrame, benchmark_name: str) -> list[dict]:
-    """The six comparisons behind check 3, in the test period."""
+    """The comparisons behind check 3, in the test period (each at normal and at double costs)."""
     out = []
     for cost_label, sfx in (("normal costs", ""), ("double costs", "_2x")):
         strat = m.loc[("test", "strategy" + sfx)]
         for who, name, metric in (("buy_hold", benchmark_name, "sharpe"),
                                   ("index", "the broad index (SPY)", "sharpe"),
-                                  ("mix", "the same-risk mix", "cagr")):
+                                  ("mix", "the same-risk mix", "cagr"),
+                                  ("eqmix", "the equal-risk mix", "cagr")):
+            if ("test", who + sfx) not in m.index:
+                continue
             other = m.loc[("test", who + sfx)]
             a, b = float(strat[metric]), float(other[metric])
             out.append({"costs": cost_label, "name": name, "metric": metric,
@@ -401,8 +435,12 @@ def run_checks(subject: Subject, ev: AssetEvaluation) -> list[Check]:
         parts.append(("But fell short of " if won else "Fell short of ") +
                      "; ".join(_describe(c, with_gap=True) for c in lost) + ".")
     x = ev.mix_weight
-    parts.append(f"(Same-risk mix = {x:.0%} {'in the assets' if subject.ticker == 'Portfolio' else 'in ' + subject.ticker}"
-                 f" + {1 - x:.0%} in cash, sized on 2005-2017 data.)")
+    where = 'in the assets' if subject.ticker == 'Portfolio' else 'in ' + subject.ticker
+    xe = ev.eq_mix_weight
+    parts.append(f"(Same-risk mix = {x:.0%} {where} + {1 - x:.0%} in cash, sized on 2005-2017 data. "
+                 f"Equal-risk mix = {xe:.0%} {where} + {1 - xe:.0%} in cash, the same mix rescaled so its 2018+ "
+                 f"volatility matches the strategy's 2018+ volatility"
+                 + (", capped at 100% because there's no borrowing" if xe >= 1.0 else "") + ".)")
     headline = ("it fell short of " + "; ".join(_describe(c, with_gap=True) for c in lost)) if lost else ""
     checks.append(Check(3, "Beats the simple alternatives", PASS if not lost else FAIL,
                         " ".join(parts), headline))

@@ -137,6 +137,20 @@ frozen, so the benchmark never peeks at the test period. At equal risk the fair 
 (CAGR), not Sharpe. Mixing an asset with cash leaves its Sharpe almost unchanged, so a Sharpe comparison would just
 repeat the buy-and-hold one.
 
+**Equal-risk mix (session 5)**: A second, stricter version of the same-risk mix. Because the same-risk mix is sized
+on 2005-2017, a strategy can drift to being *bumpier* than it in 2018+, and then "beat" it simply because it took more
+risk: more risk usually earns more in a rising market. That's what happened with `vol_target` (12.9% volatility vs the
+mix's 11.8% on SPY). The equal-risk mix removes that loophole: take the same mix and rescale it so that **in 2018+ it
+was exactly as bumpy as the strategy was in 2018+**. Mixing an asset with cash scales bumpiness in proportion, so if
+the strategy was 9% bumpier than a 63% mix, the equal-risk mix holds 63% × 1.09 ≈ 69%. Then the fair question
+"at the same risk, who earned more?" has a clean answer. If the strategy loses to it (at normal or double costs),
+check 3 FAILs. It is capped at 100% (the lab never borrows).
+*Why is it allowed to use test-period data?* The rule "never tune on the test period" is about **strategy decisions**:
+anything that changes what the strategy does. The equal-risk mix changes nothing about the strategy; it is a
+**yardstick for judging** the result after the fact, like measuring both runners' times on the same day's track. It
+can only make a strategy's test harder to pass, never easier. (The same-risk mix keeps its training-only sizing, so a
+strategy still has to beat both.)
+
 **Rebalancing**: Trading back to your target percentages after prices have moved them (e.g. once a month). It
 costs a little each time.
 

@@ -31,7 +31,8 @@ COLORS = {"strategy": "#2a78d6", "buy_hold": "#eb6834", "index": "#1baf7a", "mix
 SURFACE, INK, INK_2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
 WHO_LABEL = {"strategy": "Strategy", "strategy_2x": "Strategy (double costs)",
-             "buy_hold": "Buy-and-hold", "index": "Broad index (SPY)", "mix": "Same-risk mix"}
+             "buy_hold": "Buy-and-hold", "index": "Broad index (SPY)", "mix": "Same-risk mix",
+             "eqmix": "Equal-risk mix"}
 
 
 def who_label(ev: AssetEvaluation, who: str) -> str:
@@ -39,6 +40,8 @@ def who_label(ev: AssetEvaluation, who: str) -> str:
         return ev.benchmark_name[0].upper() + ev.benchmark_name[1:]
     if who == "mix":
         return f"Same-risk mix ({ev.mix_weight:.0%} in, {1 - ev.mix_weight:.0%} cash)"
+    if who == "eqmix":
+        return f"Equal-risk mix ({ev.eq_mix_weight:.0%} in, {1 - ev.eq_mix_weight:.0%} cash)"
     return WHO_LABEL[who]
 PERIOD_LABEL = {"train": "Train 2005-2017", "test": "Test 2018+", "full": "Full period"}
 
@@ -172,7 +175,9 @@ def metrics_table(ev: AssetEvaluation) -> str:
     lines = [f"| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | {count_col} | Win rate | Avg. share invested |",
              "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for p in ("train", "test", "full"):
-        for who in ("strategy", "strategy_2x", "buy_hold", "index", "mix"):
+        for who in ("strategy", "strategy_2x", "buy_hold", "index", "mix", "eqmix"):
+            if (p, who) not in ev.metrics.index:
+                continue   # the equal-risk mix only exists in the test period
             r = ev.metrics.loc[(p, who)]
             is_strat = who.startswith("strategy")
             count = (ev.results[(p, who)].rebalances(config.ACTIVE_REBALANCE_MIN_CHANGE) if rebal and is_strat
@@ -216,6 +221,35 @@ def mix_head_to_head_md(ev: AssetEvaluation) -> list[str]:
                    f"{_pct(t.volatility)} vs {_pct(m.volatility)}), so part of any extra return is simply pay for "
                    f"extra risk. Per unit of risk (Sharpe) it scored {t.sharpe:.2f} vs the mix's {m.sharpe:.2f}.")
     lines += ["", "**Answer (test period, 2018+):** " + answer, ""]
+    lines += equal_risk_md(ev)
+    return lines
+
+
+def equal_risk_md(ev: AssetEvaluation) -> list[str]:
+    """
+    The equal-risk comparison (session 5): the same mix, rescaled so its 2018+ volatility equals the strategy's.
+    It closes the "bumpier wins" loophole: beating the same-risk mix only by taking more risk is not a win.
+    """
+    if ("test", "eqmix") not in ev.metrics.index:
+        return []
+    xe, where = ev.eq_mix_weight, "the assets" if ev.ticker == "Portfolio" else ev.ticker
+    lines = ["### Head to head: strategy vs the equal-risk mix (2018+)", "",
+             f"The equal-risk mix is the same mix rescaled so that **in 2018+** it was exactly as bumpy as the strategy "
+             f"was in 2018+: {xe:.0%} in {where} + {1 - xe:.0%} cash"
+             + (" (capped at 100%: the lab never borrows)" if xe >= 1.0 else "") + ". Using test-period volatility is "
+             "allowed here because this is a yardstick for judging, not a strategy decision. If the strategy can't earn "
+             "more than this, any win over the same-risk mix came from taking more risk, not from skill.", "",
+             "| Costs | Strategy CAGR | Equal-risk mix CAGR | Difference (points a year) | Strategy volatility | "
+             "Equal-risk mix volatility | Strategy Sharpe | Equal-risk mix Sharpe |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    won = True
+    for label, sfx in (("normal", ""), ("double", "_2x")):
+        a, b = ev.metrics.loc[("test", "strategy" + sfx)], ev.metrics.loc[("test", "eqmix" + sfx)]
+        won = won and a.cagr > b.cagr
+        lines.append(f"| {label} | {_pct(a.cagr)} | {_pct(b.cagr)} | **{(a.cagr - b.cagr) * 100:+.2f}** | "
+                     f"{_pct(a.volatility)} | {_pct(b.volatility)} | {a.sharpe:.2f} | {b.sharpe:.2f} |")
+    lines += ["", "**Answer:** " + ("at the same risk, the strategy earned more than the mix, at normal AND double costs."
+                                   if won else "at the same risk, the strategy did **not** earn more than simply owning "
+                                   "less of the asset. Check 3 fails."), ""]
     return lines
 
 
@@ -533,7 +567,8 @@ def _asset_section(ev: AssetEvaluation, out_dir: Path) -> list[str]:
                 "so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. "
                 f"In the test period its volatility was {ev.metrics.loc[('test', 'mix'), 'volatility']:.1%} vs the "
                 f"strategy's {ev.metrics.loc[('test', 'strategy'), 'volatility']:.1%}. If the strategy can't earn more than "
-                "this simple mix, it is just a complicated way of owning less of the asset.")
+                "this simple mix, it is just a complicated way of owning less of the asset. Because the two can end up "
+                "with different bumpiness in 2018+, check 3 also uses the **equal-risk mix** (below).")
     weight_md = []
     if ev.sample_size_rule == "rebalances":
         weight_chart(ev, out_dir / f"{t}_weight.png")

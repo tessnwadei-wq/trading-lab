@@ -17,7 +17,9 @@ be encouraging. It is to find the reason the result is wrong. A strategy that su
       runs a trade-timing test: trades must happen at the close AFTER the decision, never the same close.
    2. Out-of-sample: 2018+ vs training period.
    3. Beats the simple alternatives: after costs (normal and double), does it beat buy-and-hold, the broad index
-      and the same-risk mix? Say exactly which comparison failed and by how much.
+      the same-risk mix and the equal-risk mix (the mix rescaled to the strategy's 2018+ volatility)? Say exactly
+      which comparison failed and by how much. A win over the same-risk mix that comes only from being bumpier
+      than it is not a win.
    4. Parameter sensitivity: do nearby values work, or only one "magic" value?
    5. Sample size: how many trades? Under 30 = not enough evidence.
    6. Drawdown: worst peak-to-trough loss and recovery time.

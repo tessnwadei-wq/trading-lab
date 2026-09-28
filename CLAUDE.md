@@ -25,7 +25,10 @@ His ideas go through the same Skeptic Checklist as everyone else's.
 1. Look-ahead bias: does any signal use data not available at the time of the trade?
 2. Out-of-sample: how does it perform on 2018+ data vs the training period?
 3. Beats the simple alternatives: after costs (normal AND double), does it beat buy-and-hold, the broad index,
-   and the same-risk mix (asset + cash at the strategy's volatility, sized on training data only)?
+   the same-risk mix (asset + cash at the strategy's volatility, sized on training data only) AND the equal-risk mix
+   (the same mix rescaled so its 2018+ volatility equals the strategy's 2018+ volatility; a judging yardstick, so using
+   test-period volatility is allowed)? Beating the mixes only by taking more risk is not a win: losing to the
+   equal-risk mix FAILs check 3.
 4. Parameter sensitivity: do nearby parameter values also work, or only one "magic" value?
 5. Sample size: how many trades? (Under 30 = not enough evidence.)
 6. Drawdown: what's the worst peak-to-trough loss, and how long did recovery take?

@@ -35,6 +35,7 @@ tried is what stops us fooling ourselves with the one that got lucky.
 | 8 | 2026-09-26 | portfolio_ma_trend (lab v3: next-close timing, manual-reset breaker) | real | FAIL |
 | 9 | 2026-09-27 | portfolio_ma_trend (lab v4: one-day buffer on the 1% rule, 22% alert) | real | FAIL |
 | 10 | 2026-09-27 | vol_target (pre-registered, spec `fc6436b`; one look) | real | FAIL |
+| 11 | 2026-09-28 | re-run of ideas 1-4 with the equal-risk mix added to check 3 (no strategy changes) | real | FAIL (no verdict changes) |
 
 Every parameter combination tested on real data is also counted in [`trials.csv`](trials.csv) (the over-search
 counter). Add rows, never remove them; `run_lab.py` does this automatically.
