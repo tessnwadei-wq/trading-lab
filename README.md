@@ -16,13 +16,14 @@ A personal, rules-based **trading research lab** for learning. It tests trading 
 | `lab/backtest.py` | The simulator: "if we'd followed this rule, what would have happened?" Includes trading costs and cash interest. Decisions made at a day's close are traded at the **next** day's close. Holds any weight from 0% to 100% (fractional positions), with costs on each weight change. |
 | `lab/portfolio.py` | Phase 2: one strategy on several assets as one account, with the CLAUDE.md risk rules enforced. The universe is SPY, XIU.TO, GLD and IEF (bonds, added in session 5); each portfolio idea keeps the asset list it was tested with (`PORTFOLIO_STRATEGIES` in `lab/config.py`). |
 | `lab/breaker.py` | The drawdown circuit breaker. In a backtest it assumes a 21-trading-day review; in paper trading it waits for a manual reset. |
-| `reset_circuit_breaker.py` | The manual reset for paper trading (a later phase). **Human-only: only Tessy runs it; AI agents never do.** Needs `--who`, `--reason` and typing `RESET` (plus an extra step for the 20% hard floor). Every reset goes into an append-only log. |
+| `paper_trade.py` | **Your paper account** (pretend money, real prices, every risk rule), run by hand. See *How to run your paper account* below. The engine is `lab/paper.py`. |
+| `reset_circuit_breaker.py` | The manual reset for paper trading. **Human-only: only Tessy runs it; AI agents never do.** Needs `--who`, `--reason` and typing `RESET` (plus an extra step for the 20% hard floor). Every reset goes into an append-only log. |
 | `lab/metrics.py` | Scorecard numbers: yearly growth, worst fall, Sharpe ratio (above the cash rate), win rate, etc. |
 | `lab/skeptic.py` | Runs the Skeptic Checklist (PASS / WARN / FAIL per check) and gives a PASS / FAIL / NEEDS MORE DATA verdict. |
 | `lab/trials.py` | The over-search counter: how many things the lab has tried (`journal/trials.csv`), the "luck bar", and every look at the 2018+ test period (`journal/test_period_looks.csv`). |
 | `lab/report.py` | Writes `reports/<strategy>/report.md` with charts. |
 | `lab/config.py` | The ground rules as numbers: costs, the 2018 train/test split, the assets. |
-| `strategies/` | One file per trading idea. `ma_trend.py` is the simple example; `overfit_demo.py` shows what *not* to do; `vol_target.py` is idea #4 (volatility targeting). |
+| `strategies/` | One file per trading idea. `ma_trend.py` is the simple example; `overfit_demo.py` shows what *not* to do; `vol_target.py` is idea #4 (volatility targeting); `ts_momentum.py` is idea #5 (time-series momentum, a 4-asset portfolio idea). |
 | `strategies/specs/` | **Pre-registered specs**: each new idea's rules, frozen and committed on their own *before* anyone looks at its 2018+ results. Reports show the spec's commit ID. |
 | `reports/` | The generated reports. Start here to see results. |
 | `journal/` | A diary of every experiment: idea, result, verdict, lesson. |
@@ -72,7 +73,7 @@ Every time after that:
    It reads the prices in `data\csv\`, tests every strategy (plus the multi-asset portfolio) and
    prints each verdict. Takes under a minute.
 7. **Read the results.** Open `reports\ma_trend\report.md`, `reports\overfit_demo\report.md`,
-   `reports\vol_target\report.md` and `reports\portfolio_ma_trend\report.md`.
+   `reports\vol_target\report.md`, `reports\portfolio_ma_trend\report.md` and `reports\ts_momentum\report.md`.
    The easiest way to view them nicely: open the folder in [VS Code](https://code.visualstudio.com/)
    and press `Ctrl+Shift+V` on the report, or push to GitHub and view them there.
 8. **Check the lab still works** (do this after any code change):
@@ -85,6 +86,7 @@ Useful options:
 ```powershell
 python run_lab.py --strategy ma_trend            # just one strategy
 python run_lab.py --strategy portfolio_ma_trend  # just the SPY + XIU.TO + GLD portfolio with risk rules
+python run_lab.py --strategy ts_momentum         # just the SPY + XIU.TO + GLD + IEF momentum portfolio
 python run_lab.py --refresh                      # re-download EVERY price file, then run
 python run_lab.py --refresh IEF                  # re-download just the files named (here IEF), then run
 python run_lab.py --demo                         # practice mode with made-up data
@@ -113,6 +115,60 @@ are normal. The 2018+ test period grows with every refresh.
 **If the cash-rate file (`IRX.csv`) is missing**, the lab still runs but prints a warning, cash earns 0%, and
 reports say so at the top. Fix it with `python run_lab.py --refresh`.
 (On Mac/Linux it's the same, except `python3 -m venv .venv` and `source .venv/bin/activate`.)
+
+## How to run your paper account
+
+A **paper account** is pretend money that follows the rules with real prices, so you can check that everything works
+(orders, fills, costs, the risk rules, the circuit breaker) before a single real dollar is involved. There is no
+broker, no API key and no internet use except downloading prices. **Right now it can only run `buy_and_hold` of the
+4-asset control mix** (SPY, XIU.TO, GLD and IEF at up to 20% each, the rest in cash): no strategy has passed the
+Skeptic Checklist yet, so this is a practice run of the plumbing, not a test of a strategy. Any other strategy is refused.
+
+**Before you start:** get the code with **GitHub Desktop** (not the ZIP download). The paper account checks its files
+against git every time and commits them after every run, so it needs a git folder.
+
+**Once, to open the account** (in the PowerShell window from step 3 above, with `(.venv)` showing):
+```powershell
+python paper_trade.py --start --refresh
+```
+It downloads the latest prices, opens an account with **$10,000 of pretend money** at the latest closing price, and
+places its first buy orders. Nothing is bought yet: orders decided at one close fill at the **next** close. It then
+commits its files (`paper\` and `journal\paper\`) to git by itself.
+
+**Then, any evening after the markets close** (after 5 pm New York time; before that, today's price isn't a close
+yet and is ignored):
+```powershell
+python paper_trade.py --refresh
+```
+Each run catches up on every close since the last run, in order: it fills the waiting orders at the new close,
+then makes the next decisions (stops, the monthly resize, trims above 20%, the circuit breaker). You can run it every
+day or once a week; the result is the same. Then **push** in GitHub Desktop so the record is saved on GitHub too.
+
+**To look without changing anything:** `python paper_trade.py --status`.
+
+**What it writes** (every row is only ever added, never changed):
+
+| File | What's in it |
+|---|---|
+| `paper\account.json` | Cash, positions, stops and orders waiting to fill. Never edit it: it carries a checksum. |
+| `paper\circuit_breaker.json` | The circuit breaker's state. |
+| `journal\paper\orders.csv` | Every order: when it was decided, what, and why. |
+| `journal\paper\fills.csv` | Every fill: date, units, price, amount and cost. |
+| `journal\paper\balances.csv` | The account's value at every close, and how far below its peak it is. |
+| `journal\paper\events.csv` | Alerts, blocked buys and circuit-breaker trips. |
+
+**If it says REFUSED:** it found a file that is missing, was edited, or doesn't match git. That's the safety check
+working. It tells you which file. Usually the fix is GitHub Desktop → right-click the file → *Discard changes*. Never
+edit these files by hand.
+
+**If the circuit breaker trips** (the account fell 10% from its peak, or 20% from its all-time high), the run prints
+`FLAG FOR REVIEW` and opens no new trades, on every run, until *you* reset it. Nothing restarts by itself, and no AI
+agent will ever reset it for you. After you've looked at what happened (the balances and events files):
+1. `python reset_circuit_breaker.py --who Tessy --reason "what I reviewed"` and type `RESET` when asked (the 20% hard
+   floor asks for an extra confirmation);
+2. **commit** the two changed files (`paper\circuit_breaker.json` and `journal\circuit_breaker_resets.csv`) in GitHub
+   Desktop, so your reset is on the record;
+3. run `python paper_trade.py` again. Trading resumes from the next close.
 
 ## If the download fails
 

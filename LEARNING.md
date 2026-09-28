@@ -230,10 +230,50 @@ disappears out of sample (Cederburg et al. 2020), and after a crash it stays cau
 Lab result (session 4, `vol_target`): **FAIL**. It edged out the same-risk mix after costs in 2018+ (by 0.1-0.6 points a
 year) but was bumpier than it, lost to buy-and-hold and SPY per unit of risk, and missed most of the 2020 rebound.
 
+**Time-series momentum (trend following on a 12-month view)**: For each asset on its own, ask once a month: "over
+the last 12 months, did this asset earn more than cash?" If yes, hold it; if no, hold cash instead. It's called
+*time-series* momentum because each asset is compared with **its own past**, not with other assets (comparing assets
+with each other and buying the winners is *cross-sectional* momentum, a different idea). The belief behind it: news
+sinks in slowly and people follow the crowd, so trends tend to carry on for months. Source: Moskowitz, Ooi & Pedersen
+(2012), who found it across 58 futures markets, but their version could also bet on falls (shorting) and used
+**volatility scaling** and leverage; later studies (Kim, Tse & Wald 2016; Huang et al. 2020) say much of the profit came
+from that scaling rather than the signal. Lab result (session 5, `ts_momentum`, pre-registered): **FAIL**. On SPY,
+XIU.TO, GLD and IEF with every risk rule, it scored a Sharpe of 0.47 in 2018+ vs 0.81 for simply holding the same four
+assets at 20% each. The lab's tight stops, reset every month, stopped positions out on ordinary dips, so it was only
+36% invested on average.
+
+**Fair control benchmark**: A benchmark built to differ from the strategy in *one* way only. For `ts_momentum` it holds
+exactly the same four assets at the same 20% each, all the time. So if the strategy loses to it, the signal (the only
+difference) didn't help. It's like a drug trial's placebo group. Because it's always more invested than the strategy,
+it's compared on Sharpe (reward per unit of risk), and the equal-risk mix handles the "same risk, more return?" question.
+
+**Signal changes (sample size for monthly signal strategies)**: For `ts_momentum` the spec counts how many month-end
+decisions flipped an asset between "hold" and "cash", across all four assets (at least 30, plus at least 5 years of
+test period). Round trips would be muddied by the monthly resizes and stop-outs. It found 96 (45 in the test period).
+
+**Stop reset (a lesson from session 5)**: A stop sits a fixed distance below a price you choose. In `portfolio_ma_trend`
+the stop stays where it was set when you bought, so as the price rises the stop is left further and further behind. In
+`ts_momentum` every monthly resize moved the stop up to just below the *current* price (about 1-2% below), so a normal
+wobble in the next few weeks triggered it. Same rule, very different effect: how a risk rule interacts with a
+strategy has to be thought through before the test.
+
 ## Other markets (coming later)
 
 **Commodity**: A raw material like gold, oil or wheat. Gold (GLD) doesn't pay dividends or earnings; its price is
 driven by fear, interest rates and the US dollar.
+
+**Bond**: A loan you can buy and sell. The US government borrows by selling **Treasury bonds**; the 7-10 year ETF
+**IEF** (added in session 5) holds ones that are repaid in 7-10 years and pays their interest. Two things make bonds
+behave differently from stocks:
+1. **Their price moves opposite to interest rates.** A bond paying 2% becomes less attractive when new bonds pay 4%,
+   so its price falls until its yield matches; when rates fall, older bonds are worth more. The longer until repayment,
+   the bigger this effect (**duration**: IEF's is about 7, so a 1-point rise in rates knocks roughly 7% off its price).
+2. **They're often a "safe haven".** In most stock crashes (2008: IEF +17.9% while SPY fell 36.8%) investors rush to government
+   bonds and central banks cut rates, so bonds rise while stocks fall (2020: IEF +10.0%). Over 2005-2026 IEF's daily moves had a correlation
+   of about -0.28 with SPY. **But not always:** when inflation forces rates up fast, stocks *and* bonds fall together.
+   2022 was IEF's worst year (-15.2%) at the same time as a stock bear market.
+Bonds are much calmer than stocks, and a bond ETF's long-run return is roughly the interest it pays (IEF averaged about
+3% a year).
 
 **Forex (FX)**: Trading one currency against another. **USD/CAD** (Yahoo ticker `CAD=X`) is how many Canadian dollars
 one US dollar buys. When it goes up, the CAD got weaker.
@@ -316,3 +356,29 @@ person pressing "reset"). Good practice: write it down, choose it before seeing 
 
 **Currency-hedged**: Ignoring exchange-rate moves when adding up assets priced in different currencies. The
 portfolio treats XIU.TO (Canadian dollars) this way, which is a simplification.
+
+## Paper trading (session 5: the plumbing)
+
+**Paper trading (paper account)**: Following your rules with **pretend money** and **real, live prices**, day by day,
+going forward. `python paper_trade.py` runs the lab's paper account on your PC: $10,000 of pretend money, orders
+decided at one close and filled at the next, costs charged, every risk rule and the circuit breaker enforced, and every
+order, fill and balance written down in `journal/paper/`.
+
+**What a paper account proves:** that the *machinery* works in real time: prices arrive, orders are placed and filled at
+the right close, costs are charged, the 20% rule and stops fire, the circuit breaker blocks trading and only a person can
+restart it, and the records can't be quietly changed. It also shows real-life frictions a backtest hides: a price file
+that's a day late, a holiday, forgetting to run it, and how it *feels* to watch a position fall.
+
+**What it doesn't prove:** that a strategy works. A few months of results are far too short to judge (a Sharpe ratio
+needs years; remember the ±0.3 margin of error over ~10 years), and pretend money has no **real fills**: a real broker's
+price can be worse than the closing price, orders can fail, and real money changes how people behave. Right now it only
+runs `buy_and_hold` of the control mix, *because no strategy has passed the Skeptic yet*, so this run tests the plumbing,
+not an idea. Passing paper trading is a necessary step, never a sufficient one, before any thought of real money
+(and real-money trading is not allowed in this lab at all).
+
+**Checksum / tamper checks in the paper account**: The account file carries a fingerprint of its own contents, and it
+remembers a fingerprint of the `journal/paper` logs, so a hand edit (even one that's committed to git) is caught. It
+also refuses to run if its files don't match the last git commit, so every change, including a circuit-breaker reset,
+has to be on the record first. This catches accidents and casual edits. Someone determined could still rewrite
+everything *and* git history, which is why the files are also pushed to GitHub.
+
