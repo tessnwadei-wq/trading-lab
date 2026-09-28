@@ -16,9 +16,9 @@
 
 **Ground rules applied:** costs of 0.10% commission + 0.05% slippage on every buy and every sell; each decision is made from a day's closing price and **traded at the next day's close** (so gains and losses start the day after that); parameters chosen on 2005-2017 only; 2018+ used once as the out-of-sample test. Money in cash earns the 13-week US T-bill rate (^IRX), used for every asset including XIU.TO (a simplification), and Sharpe ratios measure return *above* that cash rate.
 
-**Data sources:** SPY: data/csv/SPY.csv; XIU.TO: data/csv/XIU_TO.csv; GLD: data/csv/GLD.csv; IEF: data/csv/IEF.csv (downloaded from Yahoo Finance today); CAD=X: data/csv/CAD_X.csv; ^IRX: data/csv/IRX.csv
+**Data sources:** SPY: data/csv/SPY.csv; XIU.TO: data/csv/XIU_TO.csv; GLD: data/csv/GLD.csv; IEF: data/csv/IEF.csv; CAD=X: data/csv/CAD_X.csv; ^IRX: data/csv/IRX.csv
 
-**Compared with:** equal-weight buy-and-hold of SPY/XIU.TO/GLD (1/3 each, rebalanced monthly), the broad index (SPY), and a same-risk mix of that equal-weight basket plus cash. **Simplification:** XIU.TO is in Canadian dollars and its returns are added as if in the same currency (currency moves are ignored).
+**Compared with:** equal-weight buy-and-hold of SPY/XIU.TO/GLD (1/3 each, rebalanced monthly), the broad index (SPY), a same-risk mix of that equal-weight basket plus cash, and the equal-risk mix (the same mix at the strategy's 2018+ volatility). **Simplification:** XIU.TO is in Canadian dollars and its returns are added as if in the same currency (currency moves are ignored).
 
 ## Risk manager
 
@@ -152,7 +152,7 @@ The lab decides at a day's close and trades at the **next** day's close. Before 
 
 The more things you try, the more likely your best result is luck. The lab counts every parameter combination and idea ever tested on real data in [`journal/trials.csv`](../../journal/trials.csv).
 
-**Lab-wide so far:** 4 ideas, 3,845 parameter combinations tested.
+**Lab-wide so far:** 5 ideas, 3,846 parameter combinations tested.
 
 | Tested on | Tries for this idea | Training Sharpe | Luck bar (this idea) | Rough chance it's real | Luck bar (whole lab) |
 |---|---:|---:|---:|---:|---:|

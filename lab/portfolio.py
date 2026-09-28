@@ -136,6 +136,26 @@ def risk_sized_order(avg_move: float, rate: float, max_weight: float | None = No
     return {"size": risk_size if by_risk else max_weight, "distance": distance, "loss_per_dollar": loss_per_dollar}, by_risk
 
 
+def same_day_trades(values: list, targets: list, equity: float, rate: float) -> list:
+    """
+    How much to buy (+) or sell (-) of several positions at ONE close so that each ends at exactly its target share of
+    the account AFTER all of that close's trading costs. Every trade's cost shrinks the whole account a little, so
+    sizing each trade on its own would leave the others slightly over target (the session-5 risk review found resizes
+    landing at 20.002%). Use for trades all in the same direction (all buys, or all sells).
+
+    With gap_i = target_i x equity - value_i and S = the sum of the targets, the costs make it a small set of linear
+    equations with an exact answer:  buys  delta_i = gap_i - target_i x rate x total,  total = sum(gap) / (1 + S x rate)
+                                     sells delta_i = gap_i + target_i x rate x total,  total = sum(gap) / (1 - S x rate)
+    """
+    gaps = [t * equity - v for t, v in zip(targets, values)]
+    s = sum(targets)
+    if all(g >= 0 for g in gaps):
+        total = sum(gaps) / (1 + s * rate)
+        return [g - t * rate * total for g, t in zip(gaps, targets)]
+    total = sum(gaps) / (1 - s * rate)
+    return [g + t * rate * total for g, t in zip(gaps, targets)]
+
+
 def _prepare(strategy, prices: dict, assets: list, cash_rate):
     """Line every asset up on one calendar. Signals and stop distances use each asset's own history."""
     raw = pd.DataFrame({a: prices[a]["Close"] for a in assets})
@@ -249,15 +269,14 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
     def sized_order(a, j):
         return risk_sized_order(move[j, a], rate)
 
-    def resize(a, order, j, equity):
+    def resize(a, order, j, equity, delta):
         """
         Monthly resize of a held position to order["size"] of the account (at this close), paying costs only on
         the difference, and reset its stop below today's price. For the trade list, the old segment is closed at
         today's value (reason "resize") and a new one starts, so the 1% budget is checked from the new stop.
         """
         nonlocal cash_bal
-        target = order["size"] * equity
-        delta = target - value[a]
+        # delta comes from same_day_trades: exactly order["size"] AFTER all of today's costs, never above 20%.
         if delta > 0 and not breaker.allows_new_trades:
             log.resizes_blocked_by_breaker += 1   # no top-ups while the breaker is on
             return
@@ -312,11 +331,18 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
             for a in filling:
                 buy(a, entry_order[a], j, equity, sizes_today)
                 entry_order[a] = None
-            equity = cash_bal + sum(value)
+            # Resizes: sales first, then top-ups, each group sized together (see same_day_trades).
+            todo = [a for a in range(k) if resize_order[a] and ok[j, a] and held[a]]
+            for selling in (True, False):
+                equity = cash_bal + sum(value)
+                group = [a for a in todo if (resize_order[a]["size"] * equity < value[a]) == selling]
+                if group:
+                    deltas = same_day_trades([value[a] for a in group], [resize_order[a]["size"] for a in group],
+                                             equity, rate)
+                    for a, d in zip(group, deltas):
+                        resize(a, resize_order[a], j, equity, d)
             for a in range(k):
                 if resize_order[a] and ok[j, a]:
-                    if held[a]:
-                        resize(a, resize_order[a], j, equity)
                     resize_order[a] = None
             for a in range(k):
                 if trim_order[a] and ok[j, a]:
@@ -382,7 +408,7 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
                         and not np.isnan(move[j, a]) and move[j, a] > 0):
                     order, _ = sized_order(a, j)
                     if same_close:
-                        resize(a, order, j, equity)
+                        resize(a, order, j, equity, same_day_trades([value[a]], [order["size"]], equity, rate)[0])
                         equity = cash_bal + sum(value)
                     else:
                         resize_order[a] = order

@@ -50,7 +50,7 @@ import pandas as pd
 from lab import config
 from lab.breaker import PAPER, RESET_COLUMNS, CircuitBreaker, ResetLogTampered, file_sha256, verify_reset_log
 from lab.cash import align_cash
-from lab.portfolio import risk_sized_order
+from lab.portfolio import risk_sized_order, same_day_trades
 from strategies.vol_target import month_end_decision_days
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -188,6 +188,11 @@ def integrity_problems(paths: PaperPaths, check_git: bool = True) -> list[str]:
                         "added or deleted by hand, or a file is missing.")
     try:
         CircuitBreaker.load(paths.breaker).check_reset_log(paths.reset_log)
+        # The breaker file may only change between runs through a logged reset (a new row in the reset log).
+        rows = verify_reset_log(paths.reset_log)[2]
+        if file_sha256(paths.breaker) != state.get("breaker_sha256") and rows <= state.get("reset_log_rows", 0):
+            problems.append(f"{paths.rel(paths.breaker)} changed without a logged reset: only "
+                            "reset_circuit_breaker.py (typed by Tessy) may change it between runs.")
     except ResetLogTampered as exc:
         problems.append(f"Reset log problem: {exc}")
     except (KeyError, ValueError, json.JSONDecodeError) as exc:
@@ -216,11 +221,13 @@ def load_state(paths: PaperPaths) -> tuple[dict, CircuitBreaker]:
 
 
 def save_state(paths: PaperPaths, state: dict, breaker: CircuitBreaker) -> None:
+    breaker.save(paths.breaker)
+    state["breaker_sha256"] = file_sha256(paths.breaker)      # so a hand edit of the breaker is caught
+    state["reset_log_rows"] = verify_reset_log(paths.reset_log)[2]
     state["ledger_sha256"] = ledger_sha256(paths)
     state["checksum"] = state_checksum(state)
     paths.state.parent.mkdir(parents=True, exist_ok=True)
     paths.state.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    breaker.save(paths.breaker)
 
 
 def _append(path: Path, columns: list[str], row: dict) -> None:
@@ -313,30 +320,34 @@ class Account:
                 self.s["positions"][a] = {"units": amount / price, "stop": price * (1 - o["distance"]),
                                           "entry_date": str(day.date()), "entry_price": price}
                 self.fill(day, a, o, "buy", amount / price, price, amount * self.rate)
-        equity = self.equity()
-        for a, o in todays.items():
-            if o["kind"] not in ("resize", "trim"):
-                continue
+        # Resizes and trims: sales first, then top-ups. Each group is sized together so every position ends at
+        # exactly its target AFTER all of today's costs (a top-up never lands above 20%; see same_day_trades).
+        todo = [a for a, o in todays.items() if o["kind"] in ("resize", "trim")]
+        for a in todo:
             self.s["pending"].pop(a)
-            p, price = self.s["positions"].get(a), self.s["last_price"][a]
-            if not p:
+        todo = [a for a in todo if a in self.s["positions"]]
+        for selling in (True, False):
+            equity = self.equity()
+            group = [a for a in todo if (todays[a]["target"] * equity < self.value(a)) == selling]
+            if not selling:
+                group = [a for a in group if todays[a]["kind"] == "resize"]   # a trim never buys
+                if group and not self.breaker.allows_new_trades:
+                    for a in group:   # the resize's stop stays where it was
+                        self.event(day, "top-up skipped", f"{a}: no top-ups while the circuit breaker is on")
+                    continue
+            if not group:
                 continue
-            value = p["units"] * price
-            if o["kind"] == "trim":
-                if value <= config.TRIM_BACK_TO * equity:
-                    continue
-                delta = -(value - config.TRIM_BACK_TO * equity) / (1 - config.TRIM_BACK_TO * self.rate)
-            else:
-                delta = o["target"] * equity - value
-                if delta > 0 and not self.breaker.allows_new_trades:
-                    self.event(day, "top-up skipped", f"{a}: no top-ups while the circuit breaker is on")
-                    continue
-                delta = min(delta, max(self.s["cash"], 0) / (1 + self.rate))
-                p["stop"] = price * (1 - o["distance"])       # a resize resets the stop below today's price
-            units = delta / price
-            self.s["cash"] -= delta + abs(delta) * self.rate
-            p["units"] += units
-            self.fill(day, a, o, "buy" if delta > 0 else "sell", abs(units), price, abs(delta) * self.rate)
+            deltas = same_day_trades([self.value(a) for a in group], [todays[a]["target"] for a in group],
+                                     equity, self.rate)
+            for a, delta in zip(group, deltas):
+                o, p, price = todays[a], self.s["positions"][a], self.s["last_price"][a]
+                if delta > 0:
+                    delta = min(delta, max(self.s["cash"], 0) / (1 + self.rate))
+                if o["kind"] == "resize":
+                    p["stop"] = price * (1 - o["distance"])   # a resize resets the stop below today's price
+                self.s["cash"] -= delta + abs(delta) * self.rate
+                p["units"] += delta / price
+                self.fill(day, a, o, "buy" if delta > 0 else "sell", abs(delta / price), price, abs(delta) * self.rate)
 
     # ---- step 3: decisions at this close ---------------------------------------------------------
     def decide(self, day):
@@ -347,11 +358,14 @@ class Account:
             if p and self.traded(a, day) and a not in s["pending"] and s["last_price"][a] <= p["stop"]:
                 self.order(day, a, "stop", note=f"close {s['last_price'][a]:.2f} at/below stop {p['stop']:.2f}")
         # The circuit breaker, on the account value relative to the starting cash.
-        was_ok = self.breaker.allows_new_trades
+        was_tripped, was_halted = self.breaker.tripped, self.breaker.halted
         s["day_number"] += 1
         self.breaker.update(s["day_number"], day, self.equity() / s["starting_cash"])
-        if was_ok and not self.breaker.allows_new_trades:
-            level = "the 20% HARD FLOOR" if self.breaker.halted else "the 10% circuit breaker"
+        # Flag each level when it trips, including the hard floor tripping while the 10% breaker is already on.
+        for newly, level in ((self.breaker.tripped and not was_tripped, "the 10% circuit breaker"),
+                             (self.breaker.halted and not was_halted, "the 20% HARD FLOOR")):
+            if not newly:
+                continue
             self.event(day, "circuit breaker", f"FLAG FOR REVIEW: {level} tripped at {self.equity():,.2f} "
                        f"({self.equity() / s['starting_cash'] / self.breaker.peak - 1:.1%} from the peak). "
                        "No new trades until Tessy reviews and resets it by hand.")
@@ -416,6 +430,17 @@ def start_account(paths: PaperPaths, prices: dict, cash_rate, strategy: str = "b
     if paths.state.exists() or paths.breaker.exists():
         raise PaperRefused(f"A paper account already exists ({paths.rel(paths.state)}). It is never replaced "
                            "automatically; its history is part of the record.")
+    # Deleting the account files and starting again must not become a way round the circuit breaker (found by the
+    # session-5 risk review): refuse if an account ever existed here, in the logs or in git's history.
+    if any(p.exists() for p in paths.logs.values()):
+        raise PaperRefused("journal/paper/ already holds the logs of an earlier paper account, so its account files "
+                           "were deleted. Restore them from git (GitHub Desktop: Discard changes) instead of starting "
+                           "again: a new start must never be a way round the circuit breaker.")
+    if check_git:
+        seen = _git(paths, "log", "--all", "--format=%h", "--", paths.rel(paths.state), paths.rel(paths.breaker))
+        if seen.returncode == 0 and seen.stdout.strip():
+            raise PaperRefused("git's history shows a paper account existed here before. Restore its files from git "
+                               "instead of starting again: a new start must never be a way round the circuit breaker.")
     ok, msg, _ = verify_reset_log(paths.reset_log)
     if not ok:
         raise PaperRefused(f"Reset log problem: {msg}")

@@ -209,3 +209,61 @@ def test_breaker_trips_blocks_trading_and_resumes_only_after_a_manual_reset(repo
     assert len(out["state"]["positions"]) == 4
     log = pd.read_csv(repo.reset_log)
     assert list(log["who"]) == ["Tessy"] and integrity_problems(repo) == []
+
+
+# ---- fixes from the session-5 risk-manager review ---------------------------------------------------------
+def test_every_buy_fill_is_at_or_under_twenty_percent(repo):
+    """Resizes used to ignore their own cost and land at 20.002%, setting off a trim the next day."""
+    prices = make_prices()
+    open_account(repo, prices)
+    run(repo, prices, N_DAYS - 1)
+    f, b = fills(repo), pd.read_csv(repo.logs["balances"]).set_index("date")
+    for r in f[f["side"] == "buy"].itertuples():
+        weight = float(b.loc[r.filled_on, f"{r.asset}_value"]) / float(b.loc[r.filled_on, "total"])
+        # 1e-6: balances.csv rounds to whole cents (a cent on a $2,000 position is 0.0000005 of weight). Before
+        # the fix, resize buys landed about 0.00002 over.
+        assert weight <= config.MAX_POSITION_WEIGHT + 1e-6, (r.filled_on, r.asset, weight)
+
+
+def test_deleting_the_account_and_starting_again_is_refused(repo):
+    """The bypass the review found: trip the breaker, delete the account files, --start a fresh account."""
+    prices = make_prices(crash=True)
+    open_account(repo, prices)
+    out = run(repo, prices, CRASH_I + 5)
+    assert not out["breaker"].allows_new_trades
+    repo.state.unlink()
+    repo.breaker.unlink()
+    with pytest.raises(PaperRefused, match="never be a way round the circuit breaker"):
+        start_account(repo, upto(prices, CRASH_I + 6), None, echo=lambda *_: None)
+    # Even with the logs deleted too and everything committed, git's history remembers the old account.
+    for p in repo.logs.values():
+        p.unlink()
+    subprocess.run(["git", "-C", str(repo.root), "commit", "-qam", "delete everything"], check=True)
+    with pytest.raises(PaperRefused, match="git's history"):
+        start_account(repo, upto(prices, CRASH_I + 6), None, echo=lambda *_: None)
+
+
+def test_breaker_file_changed_without_a_logged_reset_is_refused(repo):
+    """A hand edit that 'untrips' the breaker, even committed, is caught: only a logged reset may change it."""
+    prices = make_prices(crash=True)
+    open_account(repo, prices)
+    run(repo, prices, CRASH_I + 5)
+    b = json.loads(repo.breaker.read_text())
+    b["tripped"], b["peak"] = False, b["last_equity"]
+    repo.breaker.write_text(json.dumps(b, indent=2))
+    subprocess.run(["git", "-C", str(repo.root), "commit", "-qam", "sneaky untrip"], check=True)
+    problems = integrity_problems(repo)
+    assert any("changed without a logged reset" in p for p in problems)
+
+
+def test_hard_floor_is_flagged_even_when_the_breaker_is_already_on(repo):
+    prices = make_prices()
+    for a in PAPER_ASSETS:                                 # -16% (trips 10%), then -30% more (the 20% floor)
+        prices[a].iloc[CRASH_I:, 0] *= 0.84
+        prices[a].iloc[CRASH_I + 1:, 0] *= 0.70
+    open_account(repo, prices)
+    out = run(repo, prices, CRASH_I + 5)
+    events = pd.read_csv(repo.logs["events"])
+    flags = events[events["kind"] == "circuit breaker"]["detail"]
+    assert out["breaker"].halted
+    assert flags.str.contains("10% circuit breaker").any() and flags.str.contains("HARD FLOOR").any()

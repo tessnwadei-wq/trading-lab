@@ -73,3 +73,11 @@ blank rows next to two of GLD's flips). The signals themselves are identical; on
   rules interact belongs in the spec, before the look.
 - **Test-period looks for this idea:** 1.
 - **Report:** [reports/ts_momentum/report.md](../reports/ts_momentum/report.md)
+
+*Correction (2026-09-28, after the risk-manager review):* the review found that monthly resizes were sized without
+allowing for the same day's trading costs, so a top-up could land a hair above 20% (e.g. 20.002%). The engine now
+sizes all of a day's resizes together, exactly (`same_day_trades` in `lab/portfolio.py`). No strategy setting
+changed. Re-running it was look #2 ("engine bug fix from the session-5 risk review ..."). Nothing important moved:
+2018+ Sharpe 0.46 vs the fair control's 0.81 (0.27 vs 0.80 at double costs), -1.58 / -2.46 points a year vs the
+equal-risk mix, training Sharpe 0.01, 17 of 317 stop-outs over the 1% budget (worst 2.39%). **Verdict unchanged: FAIL**
+(checks 3 and 4). The tables above are from look #1; the report shows look #2.

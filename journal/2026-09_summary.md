@@ -99,7 +99,7 @@ overfit_demo 3, portfolio_ma_trend 5, **vol_target 1** (exactly the one the rule
 **Experiments this month so far:** 12 (2 synthetic, 10 real). **PASS 0 · FAIL 12 · NEEDS MORE DATA 0.**
 **Ideas tested on real data:** 5 (ma_trend, overfit_demo, portfolio_ma_trend, vol_target, ts_momentum); **3,846
 parameter combinations** in `trials.csv` (ts_momentum added 1: no search). **Test-period looks:** ma_trend 4,
-overfit_demo 4, portfolio_ma_trend 6, vol_target 2, **ts_momentum 1**.
+overfit_demo 4, portfolio_ma_trend 6, vol_target 2, **ts_momentum 2** (the second after an engine bug fix; no strategy change).
 
 | Date | Strategy | Verdict | One-line reason |
 |---|---|---|---|
