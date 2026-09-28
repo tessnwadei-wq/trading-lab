@@ -7,6 +7,7 @@ open it in any text editor or in VS Code's preview.
 
 from __future__ import annotations
 
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -166,15 +167,56 @@ def _pct(x, d=1):
 
 
 def metrics_table(ev: AssetEvaluation) -> str:
-    lines = ["| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | Trades | Win rate | Avg. share invested |",
+    rebal = ev.sample_size_rule == "rebalances"
+    count_col = f"Active rebalances (≥{config.ACTIVE_REBALANCE_MIN_CHANGE * 100:.0f} pts)" if rebal else "Trades"
+    lines = [f"| Period | Who | CAGR | Sharpe | Max drawdown | Volatility | {count_col} | Win rate | Avg. share invested |",
              "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for p in ("train", "test", "full"):
         for who in ("strategy", "strategy_2x", "buy_hold", "index", "mix"):
             r = ev.metrics.loc[(p, who)]
+            is_strat = who.startswith("strategy")
+            count = (ev.results[(p, who)].rebalances(config.ACTIVE_REBALANCE_MIN_CHANGE) if rebal and is_strat
+                     else "-" if rebal else int(r.n_trades))
+            win = "-" if rebal or not is_strat else _pct(r.win_rate, 0)
             lines.append(f"| {PERIOD_LABEL[p]} | {who_label(ev, who)} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
-                         f"{_pct(r.max_drawdown)} | {_pct(r.volatility)} | {int(r.n_trades)} | "
-                         f"{_pct(r.win_rate, 0) if who.startswith('strategy') else '-'} | {_pct(r.time_in_market, 0)} |")
+                         f"{_pct(r.max_drawdown)} | {_pct(r.volatility)} | {count} | {win} | "
+                         f"{_pct(r.time_in_market, 0)} |")
     return "\n".join(lines)
+
+
+def mix_head_to_head_md(ev: AssetEvaluation) -> list[str]:
+    """
+    The key question for a strategy that mostly changes HOW MUCH it owns: does it beat simply owning less
+    (the same-risk mix), at normal and double costs? Shown for every strategy; it is check 3's mix comparison.
+    """
+    x = ev.mix_weight
+    lines = ["### Head to head: strategy vs the same-risk mix", "",
+             f"The same-risk mix is {x:.0%} in {'the assets' if ev.ticker == 'Portfolio' else ev.ticker} + "
+             f"{1 - x:.0%} cash, rebalanced monthly, sized on 2005-2017 so it is as bumpy as the strategy was there. "
+             "At equal risk the fair question is \"who earned more?\", so the yearly return (CAGR) decides.", "",
+             "| Period | Costs | Strategy CAGR | Mix CAGR | Difference (points a year) | Strategy volatility | "
+             "Mix volatility | Strategy worst fall | Mix worst fall |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for p in ("train", "test", "full"):
+        for label, sfx in (("normal", ""), ("double", "_2x")):
+            a, b = ev.metrics.loc[(p, "strategy" + sfx)], ev.metrics.loc[(p, "mix" + sfx)]
+            diff = (a.cagr - b.cagr) * 100
+            bold = "**" if p == "test" else ""
+            lines.append(f"| {bold}{PERIOD_LABEL[p]}{bold} | {label} | {_pct(a.cagr)} | {_pct(b.cagr)} | "
+                         f"{bold}{diff:+.2f}{bold} | {_pct(a.volatility)} | {_pct(b.volatility)} | "
+                         f"{_pct(a.max_drawdown)} | {_pct(b.max_drawdown)} |")
+    t, t2 = ev.metrics.loc[("test", "strategy")], ev.metrics.loc[("test", "strategy_2x")]
+    m, m2 = ev.metrics.loc[("test", "mix")], ev.metrics.loc[("test", "mix_2x")]
+    won = t.cagr > m.cagr and t2.cagr > m2.cagr
+    answer = ("the strategy earned more than simply owning less of the asset, at normal AND double costs."
+              if won else "the strategy did **not** earn more than simply owning less of the asset "
+              f"(normal costs {t.cagr - m.cagr:+.2%} a year, double costs {t2.cagr - m2.cagr:+.2%} a year).")
+    if t.volatility > 1.05 * m.volatility:
+        # The mix was sized on training data, so in the test period the two can end up with different risk.
+        answer += (f" **But** in the test period the strategy was bumpier than the mix (volatility "
+                   f"{_pct(t.volatility)} vs {_pct(m.volatility)}), so part of any extra return is simply pay for "
+                   f"extra risk. Per unit of risk (Sharpe) it scored {t.sharpe:.2f} vs the mix's {m.sharpe:.2f}.")
+    lines += ["", "**Answer (test period, 2018+):** " + answer, ""]
+    return lines
 
 
 def regime_md(ev: AssetEvaluation) -> str:
@@ -192,17 +234,19 @@ def timing_md(ev: AssetEvaluation) -> list[str]:
     t = ev.timing
     if t is None:
         return []
+    rebal = ev.sample_size_rule == "rebalances"
     lines = ["### Timing cost (when the trade happens)", "",
              "The lab decides at a day's close and trades at the **next** day's close. Before session 3 it traded "
              "at the *same* close it decided on, which you can't do in real life. This table shows the strategy "
              "both ways (normal costs). Only the next-close numbers are used by the Skeptic.", "",
-             "| Period | Timing | CAGR | Sharpe | Max drawdown | Trades |", "|---|---|---:|---:|---:|---:|"]
+             f"| Period | Timing | CAGR | Sharpe | Max drawdown | {'Active rebalances' if rebal else 'Trades'} |",
+             "|---|---|---:|---:|---:|---:|"]
     names = {"same_close": "Same close (old, optimistic)", "next_close": "**Next close (used)**"}
     for p in ("train", "test", "full"):
         for ex in ("same_close", "next_close"):
             r = t.loc[(p, ex)]
             lines.append(f"| {PERIOD_LABEL[p]} | {names[ex]} | {_pct(r.cagr)} | {r.sharpe:.2f} | "
-                         f"{_pct(r.max_drawdown)} | {int(r.n_trades)} |")
+                         f"{_pct(r.max_drawdown)} | {int(r.active_rebalances if rebal else r.n_trades)} |")
     lines += ["", timing_sentence(ev), ""]
     return lines
 
@@ -351,17 +395,22 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
              "The portfolio enforces the CLAUDE.md risk rules in code (`lab/portfolio.py`). Numbers are for the "
              "full period at normal costs.", "",
              "| Rule | Setting | How often it limited a trade | Worst case seen |", "|---|---|---|---|",
-             f"| Max risk per trade | {config.MAX_RISK_PER_TRADE:.0%} of the account (costs included), with a stop "
-             f"{config.STOP_ATR_MULTIPLE:g} × the {config.STOP_ATR_DAYS}-day average daily move below entry | "
+             f"| Max risk per trade | A stopped-out trade should normally lose no more than "
+             f"{config.MAX_RISK_PER_TRADE:.0%} of the account (costs included), even though the stop-sale fills a day "
+             f"later. Stop: {config.STOP_ATR_MULTIPLE:g} × the {config.STOP_ATR_DAYS}-day average daily move below "
+             f"entry; sized as if {config.STOP_FILL_BUFFER_MOVES:g} more moves away (the one-day buffer) | "
              f"Set the size of **{log.sized_by_risk_rule} of {log.entries}** entries ({log.sized_by_risk_rule / e:.0%}); "
-             f"the stop closed {log.stop_exits} trades | Worst closed trade lost "
-             f"{-log.worst_trade_loss:.2%} of the account"
-             + (f" (stop-outs averaged {-stops['loss_of_account'].mean():.2%})" if len(stops) else "") + " |",
-             f"| Max position size | {config.MAX_POSITION_WEIGHT:.0%} of the account "
-             f"(trimmed back to {config.TRIM_BACK_TO:.0%}) | Capped the size of **{log.sized_by_cap} of {log.entries}** "
-             f"entries ({log.sized_by_cap / e:.0%}); trimmed a grown position {log.trims} times | Largest position "
-             f"at any close: {log.max_position_weight:.1%} (a position found above 20% is trimmed at the next close; "
-             f"{log.days_over_cap} position-days closed above 20%) |",
+             f"the stop closed {log.stop_exits} trades, **{log.stops_over_budget}** of them lost more than "
+             f"{config.MAX_RISK_PER_TRADE:.0%} | Worst stop-out lost {-log.worst_stop_loss:.2%} of the account"
+             + (f" (stop-outs averaged {-stops['loss_of_account'].mean():.2%})" if len(stops) else "")
+             + f"; worst closed trade of any kind {-log.worst_trade_loss:.2%} |",
+             f"| Max position size | No buy that would take a position above {config.MAX_POSITION_WEIGHT:.0%}. "
+             f"Anything above {config.MAX_POSITION_WEIGHT:.0%} at a close is trimmed to {config.TRIM_BACK_TO:.0%} at the "
+             f"next close. Alert above {config.POSITION_ALERT_WEIGHT:.0%} | Capped the size of **{log.sized_by_cap} of "
+             f"{log.entries}** entries ({log.sized_by_cap / e:.0%}); trimmed a grown position {log.trims} times | "
+             f"Largest position at any close: {log.max_position_weight:.1%} ({log.days_over_cap} position-days closed "
+             f"above {config.MAX_POSITION_WEIGHT:.0%}, each trimmed at the next close); "
+             f"**{len(log.alerts)}** alert{'s' if len(log.alerts) != 1 else ''} above {config.POSITION_ALERT_WEIGHT:.0%} |",
              f"| Max open positions | {config.MAX_OPEN_POSITIONS} | Blocked {log.blocked_by_max_positions} entries | "
              f"Most open at once: {log.max_open_positions} (only {len(res.weights.columns)} assets, so this rule "
              f"{'can never bind yet' if len(res.weights.columns) <= config.MAX_OPEN_POSITIONS else 'can bind'}) |",
@@ -374,6 +423,17 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
     if log.hard_stop:
         lines += [f"**🛑 FLAG FOR REVIEW: the hard floor was hit on {log.hard_stop['tripped'].date()} "
                   f"({log.hard_stop['drawdown']:.1%} from the all-time high). No new trades were opened after that.**", ""]
+    if log.alerts:
+        lines += [f"**⚠️ POSITION ALERT: a position ended the day above {config.POSITION_ALERT_WEIGHT:.0%} "
+                  f"{len(log.alerts)} time{'s' if len(log.alerts) != 1 else ''}.** Each was trimmed to "
+                  f"{config.TRIM_BACK_TO:.0%} at the next close.", "",
+                  "| Day | Asset | Share of the account at the close |", "|---|---|---:|"]
+        lines += [f"| {a['date'].date()} | {a['asset']} | {a['weight']:.1%} |" for a in log.alerts[:20]]
+        if len(log.alerts) > 20:
+            lines.append(f"| ... | {len(log.alerts) - 20} more | |")
+        lines.append("")
+    else:
+        lines += [f"**Position alerts (above {config.POSITION_ALERT_WEIGHT:.0%} at a close): none.**", ""]
     if log.breaker_events:
         lines += ["**⚠️ FLAG FOR REVIEW: the circuit breaker triggered.**", "",
                   "| Triggered | Fall from peak | Trading resumed | How |", "|---|---:|---|---|"]
@@ -386,23 +446,45 @@ def risk_manager_section(ev: AssetEvaluation) -> str:
         lines += [f"**Circuit breaker: never triggered.** The account never fell {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} "
                   "from its peak.", ""]
     lines += ["**In plain English:** the 1% rule works by choosing the position size so that hitting the stop "
-              "(plus the costs of buying and selling) loses about 1% of the account. For these assets the stop "
-              "distance was usually under 5%, so the 1% rule would have allowed a position bigger than 20%; the 20% "
-              "cap was then the rule that actually set the size. Every order fills at the close *after* the "
-              "decision, so a loss can exceed 1% if a price gaps through the stop, or keeps falling for the day "
-              "before the sale fills.", "",
+              "(plus the costs of buying and selling) loses about 1% of the account. Every order fills at the close "
+              "*after* the decision, so a stopped-out price can keep falling for a day before the sale fills. The "
+              f"**one-day buffer** allows for that: positions are sized as if the stop were "
+              f"{config.STOP_FILL_BUFFER_MOVES:g} more average daily moves away (chosen from 2005-2017 data and "
+              "common sense; see `STOP_FILL_BUFFER_MOVES` in `lab/config.py`). A big gap through the stop can still "
+              "cost more than 1%, which is why the table counts stop-outs over budget. For these assets the room "
+              "needed was usually under 5-7%, so the 1% rule would still have allowed a position bigger than 20%; "
+              "the 20% cap was then the rule that actually set the size.", "",
               f"**Circuit breaker assumption (backtest only):** a person can't press \"reset\" inside a simulation, "
               f"so after a {config.CIRCUIT_BREAKER_DRAWDOWN:.0%} fall the backtest assumes a review of "
               f"**{config.CIRCUIT_BREAKER_REVIEW_DAYS} trading days** (about a month; `CIRCUIT_BREAKER_REVIEW_DAYS` in "
               "`lab/config.py`, chosen by common sense, not by looking at results), then resumes. In paper trading "
-              "nothing restarts by itself: new trades stay blocked until Tessy runs `python reset_circuit_breaker.py "
-              "--who <name> --reason \"...\"`, which is logged in `journal/circuit_breaker_resets.csv`.", "",
+              "nothing restarts by itself: new trades stay blocked until **Tessy, in person,** runs `python "
+              "reset_circuit_breaker.py --who <name> --reason \"...\"` and types `RESET` to confirm (plus an extra "
+              "confirmation for the 20% hard floor). Agents never run, script or suggest automating it. Every reset "
+              "is appended to `journal/circuit_breaker_resets.csv`, a log that can only be added to.", "",
               f"**Not yet tested on real data:** the {config.MAX_OPEN_POSITIONS}-position limit (only "
               f"{len(res.weights.columns)} assets so far){' and the circuit breaker (never triggered)' if not log.breaker_events else ''}. "
               "All the risk rules are also checked with made-up prices in `tests/test_portfolio.py` and "
               "`tests/test_breaker.py`.",
               "", f"![Portfolio exposure](portfolio_exposure.png)", ""]
     return "\n".join(lines)
+
+
+def weight_chart(ev: AssetEvaluation, path: Path):
+    """Fractional strategies: share of the account in the asset over time, with the same-risk mix's fixed share."""
+    res = ev.results[("full", "strategy")]
+    fig, ax = plt.subplots(figsize=(9, 3.2))
+    _style(ax, f"{ev.ticker}: share of the account invested (the rest is cash)")
+    ax.plot(res.position.index, res.position, color=COLORS["strategy"], linewidth=1.0, label="Strategy")
+    ax.axhline(ev.mix_weight, color=COLORS["mix"], linewidth=1.6, linestyle="--", label=who_label(ev, "mix"))
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    ax.set_ylim(0, 1.05)
+    start, end = ev.periods["full"]
+    _shade_test(ax, start - pd.Timedelta(days=60), end + pd.Timedelta(days=60))
+    ax.legend(frameon=False, fontsize=9, loc="lower left")
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
 
 
 def exposure_chart(ev: AssetEvaluation, path: Path):
@@ -452,8 +534,13 @@ def _asset_section(ev: AssetEvaluation, out_dir: Path) -> list[str]:
                 f"In the test period its volatility was {ev.metrics.loc[('test', 'mix'), 'volatility']:.1%} vs the "
                 f"strategy's {ev.metrics.loc[('test', 'strategy'), 'volatility']:.1%}. If the strategy can't earn more than "
                 "this simple mix, it is just a complicated way of owning less of the asset.")
+    weight_md = []
+    if ev.sample_size_rule == "rebalances":
+        weight_chart(ev, out_dir / f"{t}_weight.png")
+        weight_md = ["### How much was invested", "",
+                     f"![{ev.ticker} share invested]({t}_weight.png)", ""]
     return [f"### Skeptic Checklist", "", checklist_md(ev), "",
-            mix_note, "",
+            mix_note, ""] + mix_head_to_head_md(ev) + weight_md + [
             "### Equity curve", "",
             f"![{ev.ticker} equity curve]({t}_equity.png)", "",
             "### Drawdown", "", f"![{ev.ticker} drawdown]({t}_drawdown.png)", "",
@@ -487,6 +574,35 @@ def _header(title: str, rule: str, evaluations, overall, sources, cash_ok: bool)
     return md
 
 
+def spec_md(strategy, is_demo: bool) -> str:
+    """
+    Pre-registration box for strategies with a frozen spec: the spec's commit ID, checked against git when
+    git is available, and the statement that the spec came before any test-period look.
+    """
+    commit, path = getattr(strategy, "spec_commit", None), getattr(strategy, "spec_path", None)
+    if not commit:
+        return ""
+    check = "(couldn't check with git here)"
+    try:
+        when = subprocess.run(["git", "show", "-s", "--format=%ci", commit], cwd=ROOT, capture_output=True,
+                              text=True, check=True).stdout.strip()
+        files = subprocess.run(["git", "show", "--name-only", "--format=", commit], cwd=ROOT, capture_output=True,
+                               text=True, check=True).stdout.split()
+        check = (f"committed {when}; checked with git: that commit contains only `{path}`" if files == [path]
+                 else f"committed {when}; ⚠️ that commit also changed: {', '.join(f for f in files if f != path)}")
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    from lab import trials
+    looks = trials.looks_for(strategy.name)
+    first = (f"The first test-period look was logged on {looks[0]['date']} (\"{looks[0]['reason']}\")."
+             if looks and not is_demo else "")
+    return "\n".join([
+        "> **Pre-registered.** The rules were frozen in "
+        f"[`{path}`](../../{path}) **before any code was written and before any look at the 2018+ test "
+        f"period.** Spec commit: `{commit}` ({check}). {first} No parameter search was done; if the idea fails, "
+        "any change is a new idea with a new spec and a new look.", ""])
+
+
 def write_report(strategy, evaluations: list[AssetEvaluation], overall: str, sources: dict,
                  all_prices: dict, extra_md: str = "", cash_ok: bool = True) -> Path:
     out_dir = REPORTS_DIR / strategy.name
@@ -494,6 +610,11 @@ def write_report(strategy, evaluations: list[AssetEvaluation], overall: str, sou
     is_demo = any(e.is_demo for e in evaluations)
 
     md = _header(strategy.name, strategy.description, evaluations, overall, sources, cash_ok)
+    pre = spec_md(strategy, is_demo)
+    if pre:
+        md += [pre, ""]
+    if getattr(strategy, "report_note", ""):
+        md += [strategy.report_note, ""]
     if extra_md:
         md += [extra_md, ""]
     for ev in evaluations:

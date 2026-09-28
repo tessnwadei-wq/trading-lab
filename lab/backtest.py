@@ -2,7 +2,9 @@
 The backtest engine: "if we had followed these rules in the past, what would have happened?"
 
 How it works, in plain English:
-  1. The strategy looks at each day's CLOSING price and says 1 (be invested) or 0 (hold cash).
+  1. The strategy looks at each day's CLOSING price and says how much of the account to have invested:
+     1 (all in), 0 (all in cash), or any weight in between, e.g. 0.45 = 45% in the asset and 55% in cash
+     (a "fractional position", added in session 4 for vol_target).
   2. TRADE TIMING. We only have closing prices, and you can't trade at a closing price you have only
      just seen: by then the market is shut. So a decision made from day t's close is traded at the
      NEXT day's close (t+1), and gains or losses count from there (the move from t+1 to t+2).
@@ -15,11 +17,17 @@ How it works, in plain English:
   3. Each day, if we're invested we earn the asset's daily return; in cash we earn the
      T-bill interest rate (see lab/cash.py), or 0 if that data is missing.
   4. Every time we buy or sell, we pay costs (commission + slippage) on the amount traded.
+  5. FRACTIONAL POSITIONS. A weight like 60% doesn't stay 60% by itself: if the asset rises, it becomes a
+     bigger share of the account ("drift"). So the engine only trades when the strategy's target weight
+     CHANGES; on that day it trades from the drifted weight to the new target and pays costs on the
+     difference (e.g. 64% -> 50% trades 14% of the account). On other days the weight just drifts.
+     For all-in/all-out strategies nothing can drift (100% stays 100%, 0% stays 0%), so they are
+     calculated exactly as before; tests/test_fractional.py proves the two calculations agree.
 
 Simplifications (fine for phase 1, listed so nobody forgets them):
-  * Long-only: we can own the asset or hold cash, never bet on it falling (no shorting).
-  * One asset at a time, 100% in or 100% out. Position sizing and the risk rules live in
-    lab/portfolio.py (phase 2).
+  * Long-only: we can own the asset or hold cash, never bet on it falling (no shorting), and never
+    more than 100% (no borrowing).
+  * One asset at a time. Position sizing and the risk rules live in lab/portfolio.py (phase 2).
   * Trades fill exactly at the next close (plus the slippage cost). In real life you'd send a
     "market-on-close" order during day t+1.
 """
@@ -39,14 +47,21 @@ from lab.cash import align_cash
 class BacktestResult:
     equity: pd.Series      # account value over time, starting at 1.0 (= 100% of starting money)
     returns: pd.Series     # daily % change of the account, after costs
-    position: pd.Series    # what we actually held each day (0 or 1)
+    position: pd.Series    # share of the account invested each day (0 to 1), after any drift
     trades: pd.DataFrame   # one row per round trip: entry date, exit date, return
     cost_multiplier: float
     cash_returns: pd.Series = None  # the daily cash (T-bill) rate on the same days: Sharpe's yardstick
+    turnover: pd.Series = None      # share of the account traded at the close before each day (0 = no trade)
 
     def __post_init__(self):
         if self.cash_returns is None:
             self.cash_returns = pd.Series(0.0, index=self.returns.index)
+
+    def rebalances(self, min_change: float = 1e-12) -> int:
+        """How many times the weight was changed by at least `min_change` (e.g. 0.05 = 5 percentage points)."""
+        if self.turnover is None:
+            return 0
+        return int((self.turnover >= min_change).sum())
 
     @property
     def n_trades(self) -> int:
@@ -73,7 +88,8 @@ def run_backtest(prices: pd.DataFrame, signal: pd.Series,
     Run one backtest.
 
     prices          DataFrame with a 'Close' column.
-    signal          Series of 0/1 (NaN during warm-up = treated as cash) decided at each day's close.
+    signal          Series of target weights from 0 to 1 (NaN during warm-up = treated as cash), decided at
+                    each day's close. 0/1 = all in or all out; e.g. 0.45 = 45% invested.
     cost_multiplier 1.0 = normal costs, 2.0 = double costs (a skeptic check).
     start, end      optional: only measure results inside this window. The signal is still
                     computed from all earlier data, just as it would have been in real life.
@@ -97,18 +113,52 @@ def run_backtest(prices: pd.DataFrame, signal: pd.Series,
         position = position.loc[window]
         asset_ret = asset_ret.loc[window]
         cash_ret = cash_ret.loc[window]
-    # If we are already invested on the first day of the window, count that as a
-    # purchase at the close just before it: the window is judged as if we started with cash.
-    prev_position = position.shift(1).fillna(0.0)
-    turnover = (position - prev_position).abs()
+    rate = config.COST_PER_TRADE * cost_multiplier
+    if position.isin([0.0, 1.0]).all():
+        # All-in or all-out every day: weights can't drift, so the simple formula below is exact.
+        # If we are already invested on the first day of the window, count that as a
+        # purchase at the close just before it: the window is judged as if we started with cash.
+        prev_position = position.shift(1).fillna(0.0)
+        turnover = (position - prev_position).abs()
 
-    cost = turnover * config.COST_PER_TRADE * cost_multiplier
-    # Invested share earns the asset's return; the rest sits in cash and earns interest.
-    strat_ret = position * asset_ret + (1 - position) * cash_ret - cost
+        cost = turnover * rate
+        # Invested share earns the asset's return; the rest sits in cash and earns interest.
+        strat_ret = position * asset_ret + (1 - position) * cash_ret - cost
+    else:
+        position, turnover, strat_ret = _drifting_weights(position, asset_ret, cash_ret, rate)
     equity = (1 + strat_ret).cumprod()
 
     trades = _list_trades(position, equity, strat_ret)
-    return BacktestResult(equity, strat_ret, position, trades, cost_multiplier, cash_ret)
+    return BacktestResult(equity, strat_ret, position, trades, cost_multiplier, cash_ret, turnover)
+
+
+def _drifting_weights(target: pd.Series, asset_ret: pd.Series, cash_ret: pd.Series, rate: float):
+    """
+    Fractional positions, day by day. target[i] is the weight the strategy wants during day i (already
+    lagged for trade timing). We trade only when the target changes; otherwise the weight drifts with prices.
+
+    Returns (weight actually held each day, share of the account traded before each day, daily return).
+    Works for 0/1 targets too, and then gives exactly the same numbers as the simple formula in run_backtest.
+    """
+    tgt, ra, rc = target.to_numpy(), asset_ret.to_numpy(), cash_ret.to_numpy()
+    n = len(tgt)
+    held, traded, rets = np.empty(n), np.zeros(n), np.empty(n)
+    w_end, prev_target = 0.0, 0.0   # the window starts in cash
+    for i in range(n):
+        if tgt[i] != prev_target:
+            # Trade at the close before day i, from the drifted weight to the new target.
+            traded[i], w = abs(tgt[i] - w_end), tgt[i]
+        else:
+            w = w_end                # no new decision: keep what we have, however it drifted
+        prev_target = tgt[i]
+        gross = w * ra[i] + (1 - w) * rc[i]   # invested part earns the asset, the rest earns cash interest
+        rets[i] = gross - traded[i] * rate    # costs on the amount traded
+        held[i] = w
+        # Drift: the invested part grew by (1 + asset return), the whole account by (1 + gross).
+        # (Costs come out of both parts in proportion, so they don't change the weight.)
+        w_end = w * (1 + ra[i]) / (1 + gross) if 1 + gross > 0 else 0.0
+    idx = target.index
+    return pd.Series(held, index=idx), pd.Series(traded, index=idx), pd.Series(rets, index=idx)
 
 
 def _list_trades(position: pd.Series, equity: pd.Series, strat_ret: pd.Series) -> pd.DataFrame:

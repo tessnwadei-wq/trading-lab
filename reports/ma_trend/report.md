@@ -1,6 +1,6 @@
 # Strategy report: `ma_trend`
 
-*Generated 2026-09-26 by `python run_lab.py`.*
+*Generated 2026-09-27 by `python run_lab.py`.*
 
 **Rule:** Hold the asset when price is above its 200-day moving average, otherwise hold cash.
 
@@ -36,6 +36,21 @@
 | 9 | **Verdict** | **❌ FAIL** | It failed 1 of 8 checks. Main problem (beats the simple alternatives): it fell short of buy-and-hold at normal costs (Sharpe 0.58 vs 0.68, short by 0.10); the broad index (SPY) at normal costs (Sharpe 0.58 vs 0.68, short by 0.10); the same-risk mix at normal costs (yearly return 9.5% vs 9.7%, short by 0.2 percentage points a year); buy-and-hold at double costs (Sharpe 0.51 vs 0.68, short by 0.17); the broad index (SPY) at double costs (Sharpe 0.51 vs 0.68, short by 0.17); the same-risk mix at double costs (yearly return 8.6% vs 9.7%, short by 1.1 percentage points a year). |
 
 **Same-risk mix:** 57% in SPY and 43% in cash earning interest, rebalanced monthly. 57% was chosen so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. In the test period its volatility was 10.7% vs the strategy's 12.6%. If the strategy can't earn more than this simple mix, it is just a complicated way of owning less of the asset.
+
+### Head to head: strategy vs the same-risk mix
+
+The same-risk mix is 57% in SPY + 43% cash, rebalanced monthly, sized on 2005-2017 so it is as bumpy as the strategy was there. At equal risk the fair question is "who earned more?", so the yearly return (CAGR) decides.
+
+| Period | Costs | Strategy CAGR | Mix CAGR | Difference (points a year) | Strategy volatility | Mix volatility | Strategy worst fall | Mix worst fall |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Train 2005-2017 | normal | 6.2% | 5.8% | +0.39 | 11.0% | 10.8% | -24.5% | -35.6% |
+| Train 2005-2017 | double | 5.2% | 5.8% | -0.57 | 11.0% | 10.8% | -27.0% | -35.7% |
+| **Test 2018+** | normal | 9.5% | 9.7% | **-0.17** | 12.6% | 10.7% | -24.1% | -20.1% |
+| **Test 2018+** | double | 8.6% | 9.7% | **-1.10** | 12.6% | 10.7% | -26.2% | -20.1% |
+| Full period | normal | 7.6% | 7.4% | +0.16 | 11.7% | 10.7% | -24.5% | -35.6% |
+| Full period | double | 6.6% | 7.4% | -0.78 | 11.7% | 10.7% | -27.0% | -35.7% |
+
+**Answer (test period, 2018+):** the strategy did **not** earn more than simply owning less of the asset (normal costs -0.17% a year, double costs -1.10% a year). **But** in the test period the strategy was bumpier than the mix (volatility 12.6% vs 10.7%), so part of any extra return is simply pay for extra risk. Per unit of risk (Sharpe) it scored 0.58 vs the mix's 0.67.
 
 ### Equity curve
 
@@ -114,6 +129,21 @@ The lab decides at a day's close and trades at the **next** day's close. Before 
 
 **Same-risk mix:** 62% in XIU.TO and 38% in cash earning interest, rebalanced monthly. 62% was chosen so its bumpiness (volatility) matched the strategy's **on 2005-2017 data only**, then frozen for 2018+. In the test period its volatility was 9.4% vs the strategy's 10.0%. If the strategy can't earn more than this simple mix, it is just a complicated way of owning less of the asset.
 
+### Head to head: strategy vs the same-risk mix
+
+The same-risk mix is 62% in XIU.TO + 38% cash, rebalanced monthly, sized on 2005-2017 so it is as bumpy as the strategy was there. At equal risk the fair question is "who earned more?", so the yearly return (CAGR) decides.
+
+| Period | Costs | Strategy CAGR | Mix CAGR | Difference (points a year) | Strategy volatility | Mix volatility | Strategy worst fall | Mix worst fall |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Train 2005-2017 | normal | 1.9% | 4.7% | -2.82 | 11.1% | 10.9% | -26.9% | -32.5% |
+| Train 2005-2017 | double | 0.4% | 4.7% | -4.36 | 11.1% | 10.9% | -36.8% | -32.6% |
+| **Test 2018+** | normal | 8.4% | 9.0% | **-0.57** | 10.0% | 9.4% | -19.3% | -22.4% |
+| **Test 2018+** | double | 7.4% | 8.9% | **-1.53** | 10.0% | 9.4% | -22.3% | -22.4% |
+| Full period | normal | 4.6% | 6.5% | -1.91 | 10.6% | 10.3% | -26.9% | -32.5% |
+| Full period | double | 3.3% | 6.5% | -3.21 | 10.7% | 10.3% | -36.8% | -32.6% |
+
+**Answer (test period, 2018+):** the strategy did **not** earn more than simply owning less of the asset (normal costs -0.57% a year, double costs -1.53% a year). **But** in the test period the strategy was bumpier than the mix (volatility 10.0% vs 9.4%), so part of any extra return is simply pay for extra risk. Per unit of risk (Sharpe) it scored 0.60 vs the mix's 0.68.
+
 ### Equity curve
 
 ![XIU.TO equity curve](XIU.TO_equity.png)
@@ -177,7 +207,7 @@ The lab decides at a day's close and trades at the **next** day's close. Before 
 
 The more things you try, the more likely your best result is luck. The lab counts every parameter combination and idea ever tested on real data in [`journal/trials.csv`](../../journal/trials.csv).
 
-**Lab-wide so far:** 3 ideas, 3,843 parameter combinations tested.
+**Lab-wide so far:** 4 ideas, 3,845 parameter combinations tested.
 
 | Tested on | Tries for this idea | Training Sharpe | Luck bar (this idea) | Rough chance it's real | Luck bar (whole lab) |
 |---|---:|---:|---:|---:|---:|

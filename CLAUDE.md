@@ -38,9 +38,15 @@ Sharpe ratios are measured on returns above the cash (T-bill) rate, and cash ear
 
 ## Risk rules (enforced in code from phase 2, in `lab/portfolio.py`)
 
-- Max 1% of account at risk per trade.
-- Max 5 open positions; max 20% of account in any single position.
+- Max 1% of account at risk per trade: size positions so that, even with the one-day delay on stop-sales, a
+  stopped-out trade normally loses no more than 1% of the account (the one-day buffer, `STOP_FILL_BUFFER_MOVES`).
+- Max 5 open positions.
+- 20% rule: No buy that would take a position above 20%. Anything above 20% at a close is trimmed to 18% at the next
+  close. An alert is logged and shown in the report whenever a position ends a day above 22%.
 - If the account falls 10% from its peak, stop opening new trades and flag for review.
+- The circuit breaker is human-only. Agents must never run, script or suggest automating `reset_circuit_breaker.py`.
+  Only Tessy resets it. (A reset needs a name, a reason and a typed `RESET`, plus an extra confirmation for the 20%
+  hard floor; the reset log can only be added to.)
 
 ## Communication
 
@@ -61,6 +67,11 @@ Sharpe ratios are measured on returns above the cash (T-bill) rate, and cash ear
 - Trades fill at the next day's close (`config.EXECUTION = "next_close"`). `execution="same_close"` exists only for the
   reports' "Timing cost" table; never use it to judge a strategy.
 - The circuit breaker lives in `lab/breaker.py`: a fixed review period in backtests, a manual logged reset
-  (`reset_circuit_breaker.py`) in paper mode.
+  (`reset_circuit_breaker.py`) in paper mode. Agents must never run, script or suggest automating
+  `reset_circuit_breaker.py`. Only Tessy resets it.
+- New strategy ideas are pre-registered: the rules are frozen in `strategies/specs/<idea>.md` and committed on their
+  own BEFORE any test-period look. Every report for the idea shows that spec's commit ID.
+- Strategies may hold any weight from 0% to 100% (fractional positions); costs are charged on the size of each weight
+  change. Always-partly-invested strategies use the sample-size rule written in their spec, not the 30-trade rule.
 - Experiments are logged in `journal/` (see `journal/README.md` for the format).
 - Run `python -m pytest` before opening a pull request. It must pass.

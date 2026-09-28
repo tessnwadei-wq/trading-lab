@@ -26,7 +26,12 @@ Turn one written rule into working, well-commented code, then run it.
 - Costs: always use the defaults in `lab/config.py` (0.10% commission + 0.05% slippage per trade). Never turn them off.
 - Data split: tune or choose parameters ONLY on data before 2018 (`config.TRAIN_END`). If a strategy
   searches for parameters, it must receive `prices.loc[:TRAIN_END]` only. The 2018+ test period is used once.
-- Long-only, one asset at a time, for now. No leverage, no shorting.
+- Long-only, one asset at a time, for now. No leverage, no shorting. Weights between 0 and 1 are allowed
+  (fractional positions); the engine charges costs on each weight change.
+- Pre-registration: code a new idea only from its frozen spec in `strategies/specs/<idea>.md`, which must already be
+  committed on its own. Record its commit ID in the strategy (`spec_commit`). Develop on demo data and pre-2018 data
+  only; the one real test-period run is `python run_lab.py --reason "<idea> pre-registered test"`.
+- Never run, script or suggest automating `reset_circuit_breaker.py`. Only Tessy resets the circuit breaker.
 - No live trading, no broker APIs, no API keys in code.
 - Simple and commented beats clever. Tessy is learning to read this code.
 - Do not write the verdict. That is the `skeptic` agent's job.

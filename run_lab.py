@@ -28,11 +28,13 @@ from lab.report import write_portfolio_report, write_report
 from lab.skeptic import evaluate, overall_verdict
 from strategies.ma_trend import MATrend
 from strategies.overfit_demo import OverfitDemo
+from strategies.vol_target import VolTarget
 
 # Register new strategies here.
 STRATEGIES = {
     "ma_trend": MATrend,
     "overfit_demo": OverfitDemo,
+    "vol_target": VolTarget,
 }
 PORTFOLIOS = {f"portfolio_{name}": name for name in config.PORTFOLIO_STRATEGIES}
 
@@ -90,7 +92,8 @@ def main(argv=None) -> int:
                 notes.append(search_note(ticker, fitted))
             if not args.demo:
                 trials.log_trial(name, ticker, len(search) if search is not None else 1,
-                                 "brute-force search on 2005-2017" if search is not None else "fixed textbook values")
+                                 "brute-force search on 2005-2017" if search is not None
+                                 else getattr(strategy, "how_chosen", "fixed textbook values"))
             ev = evaluate(fitted, prices[ticker], prices[config.BROAD_INDEX], ticker, is_demo=args.demo, cash_rate=cash)
             evaluations.append(ev)
             print_evaluation(ticker, fitted.label(), ev)
@@ -113,6 +116,13 @@ def run_portfolio(name, strategy_name, prices, cash, sources, demo, reason=""):
     print(f"      Risk rules: {risk.entries} entries, {risk.sized_by_risk_rule} sized by the 1% rule, "
           f"{risk.sized_by_cap} capped at 20%, {risk.trims} trims, {risk.stop_exits} stop exits, "
           f"circuit breaker triggered {len(risk.breaker_events)} times")
+    if risk.alerts:
+        print(f"      POSITION ALERT: a position ended the day above {config.POSITION_ALERT_WEIGHT:.0%} "
+              f"{len(risk.alerts)} time(s):")
+        for al in risk.alerts:
+            print(f"        {al['date'].date()} {al['asset']} {al['weight']:.1%}")
+    print(f"      Stop-outs: {risk.stop_exits}, worst lost {-risk.worst_stop_loss:.2%} of the account, "
+          f"{risk.stops_over_budget} over the {config.MAX_RISK_PER_TRADE:.0%} budget")
     for b in risk.breaker_events:
         print(f"      FLAG FOR REVIEW: circuit breaker tripped {b['tripped'].date()} ({b['drawdown']:.1%} from peak)")
     if not demo:

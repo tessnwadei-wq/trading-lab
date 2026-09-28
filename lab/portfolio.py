@@ -22,15 +22,19 @@ How a day works, in plain English:
   5. ENTRIES (decided now, filled tomorrow). For each asset whose signal says "in" and that we
      don't hold, place a buy order, unless 5 positions would then be open or the breaker is on.
      Its size, as a share of the account, is the SMALLER of:
-       * the 1% risk rule: size = 1% / (exit distance + buying and selling costs)
-         (so if the stop is hit, we lose about 1% of the account, costs included), and
+       * the 1% risk rule: size = 1% / (exit distance + one-day buffer + buying and selling costs)
+         (so if the stop is hit, and the sale fills a day later, a normal stop-out still loses no more
+         than about 1% of the account, costs included; see config.STOP_FILL_BUFFER_MOVES), and
        * the 20% cap: 20% of the account.
      The order is "buy <size> of my account at the close", so it is worked out with the account
      value at the close it fills at, and it never fills above 20%.
-  6. TRIMS (decided now, filled tomorrow). If a position has grown to more than 20% of the
-     account, cut it back to 18% at the next close. (Cutting back to exactly 20% would mean selling
-     a sliver, and paying costs, almost every day.) Because the trim fills a day later, a position
-     can sit a little above 20% for one close; the report counts how often (days_over_cap).
+  6. TRIMS (decided now, filled tomorrow). The 20% rule as enforced: "No buy that would take a position
+     above 20%. Anything above 20% at a close is trimmed to 18% at the next close." (Cutting back to
+     exactly 20% would mean selling a sliver, and paying costs, almost every day.) Because the trim fills
+     a day later, a position can sit a little above 20% for one close; the report counts how often
+     (days_over_cap). ALERT: any position that ENDS a day above 22% (config.POSITION_ALERT_WEIGHT) is
+     logged in RiskLog.alerts and listed in the report, because that should only happen after an unusual
+     one-day jump.
 
 What "risk" means here (the 1% rule): risk is what we lose if the trade goes wrong and we
 exit. So every trade needs an exit point decided in advance: a protective stop. We place it
@@ -88,6 +92,9 @@ class RiskLog:
     days_over_cap: int = 0            # position-days a position closed above 20% (next_close: its trim fills
                                       # at the NEXT close, so a position can sit above 20% for one close)
     worst_trade_loss: float = 0.0     # worst closed-trade loss, as a share of the account at entry
+    worst_stop_loss: float = 0.0      # worst loss of a trade closed by its stop, as a share of the account
+    stops_over_budget: int = 0        # stop-outs that lost more than the 1% budget
+    alerts: list = field(default_factory=list)  # {"date", "asset", "weight"}: a position ENDED a day above 22%
     breaker_events: list = field(default_factory=list)  # {"tripped", "drawdown", "resumed"}
     hard_stop: dict = None            # {"tripped", "drawdown"} if the 20% hard floor was ever hit
 
@@ -170,6 +177,9 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
             held[a], value[a], open_trade[a] = False, 0.0, None
             if reason == "stop":
                 log.stop_exits += 1
+                log.worst_stop_loss = min(log.worst_stop_loss, trades[-1]["loss_of_account"])
+                if trades[-1]["loss_of_account"] < -config.MAX_RISK_PER_TRADE * (1 + 1e-9):
+                    log.stops_over_budget += 1
             else:
                 log.signal_exits += 1
 
@@ -259,8 +269,10 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
                         and not entry_order[a])
             if not wants_in or np.isnan(move[j, a]) or move[j, a] <= 0:
                 continue
-            # Positions open once today's orders are filled.
-            n_open = sum(held) - sum(1 for x in exit_order if x) + sum(1 for x in entry_order if x)
+            # Positions that could be open after the next fills. A pending SALE still counts as open: its
+            # market might be shut tomorrow (a holiday) while the new buy fills, which would briefly make 6
+            # positions (found by the session-4 risk review). Waiting a day for the sale to fill is safer.
+            n_open = sum(held) + sum(1 for x in entry_order if x)
             if not breaker.allows_new_trades or n_open >= config.MAX_OPEN_POSITIONS:
                 if not blocked[a]:
                     blocked[a] = True
@@ -269,10 +281,15 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
                     else:
                         log.blocked_by_max_positions += 1
                 continue
-            distance = config.STOP_ATR_MULTIPLE * move[j, a]        # e.g. 3 x 0.8% = 2.4%
-            # Loss per $1 invested if the stop is hit: the price fall, plus the cost to buy and to sell.
-            loss_per_dollar = distance + rate + (1 - distance) * rate  # e.g. 2.4% + 0.15% + 0.15% = 2.7%
-            risk_size = config.MAX_RISK_PER_TRADE / loss_per_dollar  # 1% / 2.7% = 37% of the account
+            distance = config.STOP_ATR_MULTIPLE * move[j, a]        # e.g. 3 x 0.8% = 2.4%: where the stop goes
+            # One-day buffer: the stop-sale fills a close later, so size as if the stop were 2 more average
+            # daily moves away (e.g. 2 x 0.8% = 1.6%). The stop itself stays where it is.
+            buffer = config.STOP_FILL_BUFFER_MOVES * move[j, a]
+            # Loss per $1 invested if the stop is hit: the price fall (stop + buffer), plus the cost to buy
+            # and to sell.
+            fall = distance + buffer                                  # e.g. 2.4% + 1.6% = 4.0%
+            loss_per_dollar = fall + rate + (1 - fall) * rate         # e.g. 4.0% + 0.15% + 0.14% = 4.3%
+            risk_size = config.MAX_RISK_PER_TRADE / loss_per_dollar  # 1% / 4.3% = 23% of the account
             if risk_size < config.MAX_POSITION_WEIGHT:
                 size, log.sized_by_risk_rule = risk_size, log.sized_by_risk_rule + 1
             else:
@@ -309,6 +326,10 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
             if open_values:
                 log.max_position_weight = max(log.max_position_weight, max(open_values) / equity)
             log.days_over_cap += sum(1 for a in range(k) if over_cap(a, j, equity))
+            for a in range(k):  # the 22% alert: a position ended the day well above the 20% limit. Checked even
+                # when the asset's own market is shut: its share can still grow if the rest of the account falls.
+                if held[a] and value[a] > config.POSITION_ALERT_WEIGHT * equity:
+                    log.alerts.append({"date": dates[j], "asset": assets[a], "weight": value[a] / equity})
         equity_hist.append(equity)
         weight_hist.append([v / equity for v in value])
 
@@ -334,7 +355,7 @@ def simulate_portfolio(strategy, prices: dict, cash_rate: pd.Series | None = Non
         returns = returns.iloc[first:]
         returns.iloc[0] = equity.iloc[0] - 1
     return PortfolioResult(equity, returns, weights.sum(axis=1), trade_df, cost_multiplier,
-                           pd.Series(cash_r[first:], index=equity.index), log, weights)
+                           pd.Series(cash_r[first:], index=equity.index), risk=log, weights=weights)
 
 
 def portfolio_lookahead_check(strategy, prices: dict, cash_rate, assets: list, n_cuts: int = 4,

@@ -25,4 +25,7 @@ Turn ideas into rules precise enough that two people coding them separately woul
 - Prefer simple ideas with few parameters. Each extra parameter is another way to fool ourselves.
 - Explain any trading term the first time you use it, and add new terms to `LEARNING.md`.
 - Ideas from the collaborator (via the "Strategy idea" issue form) get the same treatment: rewrite them as exact rules and credit him as the source.
+- Before any code: write the idea's spec in `strategies/specs/<idea>.md` (exact rule, rebalancing and costs,
+  parameters with a reason each and "no search done", assets, the sample-size rule, and what would prove it wrong),
+  and have it committed on its own. That's pre-registration; see `strategies/specs/vol_target.md` for the model.
 - Hand finished rules to the `quant-coder` agent. Do not write strategy code yourself.

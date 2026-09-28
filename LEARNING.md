@@ -140,6 +140,33 @@ repeat the buy-and-hold one.
 **Rebalancing**: Trading back to your target percentages after prices have moved them (e.g. once a month). It
 costs a little each time.
 
+**Fractional position**: Holding part of the account in an asset and the rest in cash, e.g. 45% SPY + 55% cash,
+instead of all-in or all-out. Added to the engine in session 4 (`lab/backtest.py`).
+
+**Drift**: A fractional position doesn't stay put. If you hold 60% stock and stocks rise 10% while cash earns almost
+nothing, the stock is now about 62% of the account. The lab lets the weight drift between rebalances, and only trades
+when the strategy asks for a new weight.
+
+**Turnover and costs on weight changes**: With fractional positions, costs are charged on how much of the account
+changes hands: going from a drifted 62% to a new target of 50% trades 12% of the account, which costs 12% × 0.15% =
+0.018% of the account. **Turnover** is the total traded over a year; `vol_target` traded about 1.3-1.5 times its
+account a year, costing roughly 0.2% a year (double that at double costs).
+
+**Pre-registration (freezing the rules first)**: Writing down *exactly* what you will test, and what result would count
+as failure, **before** you look at the results, and making that record impossible to change quietly. The lab does it
+by writing a spec (`strategies/specs/<idea>.md`) and committing it on its own; git gives that commit an ID and a time,
+and pushing it to GitHub makes it public. Every report shows the ID. *Why:* after you've seen results it's very easy,
+without meaning to, to pick the version that looked best ("let's use 10% instead of 12%", "let's count this differently")
+and then believe it. If the rules and the pass/fail line were fixed beforehand, the result can't be argued away in
+either direction. Medicine does this for clinical trials for the same reason. Rule: if a pre-registered idea fails, any
+change is a *new* idea with its own spec and its own look. First used for `vol_target` in session 4.
+
+**Sample size for always-invested strategies**: The usual "30 trades" rule counts round trips (all in → all out). A
+strategy that is always partly invested almost never does a round trip, so it would show "1 trade". Instead, its spec
+agrees another count in advance: for `vol_target`, at least 30 **active rebalances** (weight changes of 5 percentage
+points or more, each one a separate decision that made it behave differently from a constant mix) and at least 5
+years of test period.
+
 **Regime**: A period with a distinct market "mood": a crash (2008, 2020), a slow bear market (2022), a calm bull
 market. Good strategies shouldn't fall apart in one regime.
 
@@ -179,6 +206,16 @@ otherwise. It aims to sidestep big crashes, at the cost of some whipsaws.
 
 **Band (buffer)**: Requiring the price to move a few % past a line before switching, to reduce whipsaws.
 
+**Volatility targeting (volatility-managed exposure)**: Instead of deciding *whether* to own an asset, decide *how
+much*, based on how jumpy it has been lately. Once a month, measure the last 21 days' bumpiness (volatility) and hold
+`12% ÷ volatility` of the account in the asset (never more than 100%, since the lab doesn't borrow), the rest in cash.
+Calm market (volatility 8%): 100% invested. Stormy market (40%): 30% invested. The idea behind it: storms tend to
+follow storms, but stormy periods haven't paid proportionally more, so stepping back during them might improve
+return per unit of risk (Moreira & Muir 2017; Harvey et al. 2018). The catch: later studies found most of the benefit
+disappears out of sample (Cederburg et al. 2020), and after a crash it stays cautious while prices bounce back.
+Lab result (session 4, `vol_target`): **FAIL**. It edged out the same-risk mix after costs in 2018+ (by 0.1-0.6 points a
+year) but was bumpier than it, lost to buy-and-hold and SPY per unit of risk, and missed most of the 2020 rebound.
+
 ## Other markets (coming later)
 
 **Commodity**: A raw material like gold, oil or wheat. Gold (GLD) doesn't pay dividends or earnings; its price is
@@ -205,6 +242,14 @@ GLD), so the risk rules can limit how the money is shared out.
 **Risk per trade**: How much you'd lose if the trade hits its stop, as a share of the account. It is NOT the
 position size: a 20% position with a stop 3% below entry risks 20% × 3% = 0.6% of the account. The lab's rule: max 1%.
 
+**One-day buffer (session 4)**: The lab only sees a stop being hit at a close, and the sale fills at the *next* close,
+so the price can keep falling for a day. To keep a normal stop-out within 1%, positions are now sized as if the stop
+were **2 more average daily moves** further away than it really is (`STOP_FILL_BUFFER_MOVES` in `lab/config.py`). Why 2:
+on training data (2005-2017), 81% of the portfolio's stop-sales filled within 2 average moves past the stop, and a
+one-day fall bigger than 2 average moves happens on only ~7% of days. Effect on real data: stop-outs over 1% went from 1
+to 0 (worst 0.99%), trades over 1% of any kind from 4 to 1. The one left was a sale on a -4% day in June 2020: a buffer
+covers normal days, not every gap.
+
 **Volatility-based position sizing**: Choosing the size so every trade risks the same 1%, whatever the asset.
 The stop is placed a distance below entry that depends on how much the asset normally moves: here 3 × its
 **average daily move** over the last 20 days (a closing-price version of the **ATR, Average True Range**).
@@ -221,9 +266,13 @@ price that keeps falling for that extra day also adds to the loss. The report sh
 lab every decision at a close becomes an order that fills at the next close. That's why a position can sit slightly
 above the 20% cap for one day: it's found above 20% at one close and trimmed at the next.
 
-**Max position size / max open positions**: No more than 20% of the account in one position and no more than 5
-positions at once. A position that grows past 20% is **trimmed** (partly sold) back to 18%. The small buffer
-avoids selling a sliver every day.
+**Max position size / max open positions**: No more than 5 positions at once, and the 20% rule, worded (session 4)
+exactly as enforced: *"No buy that would take a position above 20%. Anything above 20% at a close is trimmed to 18% at
+the next close."* **Trimmed** means partly sold. Trimming to 18% rather than 20% avoids selling a sliver every day.
+Because the trim waits a day, a position can sit a little above 20% for one close; that's expected.
+
+**Position alert (22%)**: If a position *ends a day* above 22%, something unusual happened (a big one-day jump, or the
+rest of the account fell while that asset's market was shut). The lab logs it, prints it and lists it in the report.
 
 **Drawdown circuit breaker**: An automatic "stop and think" switch. If the account falls 10% from its peak, the
 lab opens no new trades, logs it, and flags it for review in the report. Existing positions keep their normal exits.
@@ -232,9 +281,18 @@ row can't quietly add up.
 
 **Circuit breaker manual reset**: In paper trading (a later phase) the breaker **never restarts by itself**. After
 it trips, no new trades are opened until a person has reviewed what happened and runs
-`python reset_circuit_breaker.py --who Tessy --reason "what I checked"`. The reset is refused without a name and a
-reason, and every reset is written to `journal/circuit_breaker_resets.csv` (when, who, why, and what tripped it).
-This matters because an automatic restart means nobody ever actually looks. A backtest can't wait for a person, so
+`python reset_circuit_breaker.py --who Tessy --reason "what I checked"` and **types `RESET`** when asked. For the 20%
+hard floor there's an extra step: type `HARD FLOOR` and your name again. The reset is refused without all of that, and
+refuses to run at all from a script. Every reset is written to `journal/circuit_breaker_resets.csv` (when, who, why, and
+what tripped it). This matters because an automatic restart means nobody ever actually looks. **Human-only rule
+(CLAUDE.md):** agents must never run, script or suggest automating the reset. Only Tessy resets it.
+
+**Append-only log and fingerprints (hashes)**: An append-only log can be added to but never edited or shortened. A
+**hash** (here SHA-256) is a fingerprint of a file: change a single character and the fingerprint is completely
+different. Each row of the reset log stores the fingerprint of everything above it (a "hash chain"), so editing an
+old row breaks the chain; and the breaker remembers how many rows the log had and its fingerprint, so deleting rows is
+caught too. Either way, resets are refused until the log is restored (e.g. from git). It catches accidents and casual
+edits; someone determined could rewrite both files, which is why the files also live in git. A backtest can't wait for a person, so
 there the lab makes an explicit **modelling assumption**: the review takes 21 trading days (about a month,
 `CIRCUIT_BREAKER_REVIEW_DAYS` in `lab/config.py`, picked by common sense, not by looking at results), then trading
 resumes and the current value counts as the new peak. Each portfolio report prints this assumption.
